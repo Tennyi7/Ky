@@ -1,0 +1,2908 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>FITLOG — บันทึกโภชนาการและการออกกำลังกาย</title>
+  <!-- โหลดฟอนต์ Inter และ Noto Sans Thai เพื่อความคมชัดทั้งไทยและอังกฤษ -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- โหลด Tailwind CSS v3 CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Inter"', '"Noto Sans Thai"', 'system-ui', 'sans-serif']
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    /* ตั้งค่าพื้นฐานเล็กน้อยสำหรับแอนิเมชันและ Safe Area บนมือถือ */
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: "Inter", "Noto Sans Thai", system-ui, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .pb-safe { padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px)); }
+    @keyframes fadeSlide {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade { animation: fadeSlide 0.18s ease-out; }
+    @keyframes pulseRing {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.45); }
+      50% { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0); }
+    }
+    .highlight-pulse { animation: pulseRing 0.9s ease-in-out 2; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body class="bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 min-h-screen antialiased selection:bg-emerald-500/20">
+
+  <!-- แถบนำทางด้านบน (Desktop + Mobile Header) -->
+  <header class="sticky top-0 z-30 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md border-b border-zinc-200/80 dark:border-zinc-800/80">
+    <div class="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between gap-2">
+      <!-- โลโก้แอป -->
+      <button data-a="nav" data-v="dash" class="flex items-center gap-2 font-extrabold tracking-tight text-lg text-zinc-900 dark:text-white cursor-pointer shrink-0">
+        <span class="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        </span>
+        <span>FITLOG</span>
+      </button>
+
+      <!-- เมนูหลักบน Desktop -->
+      <nav id="nav-desktop" aria-label="เมนูหลัก" class="hidden md:flex items-center gap-1 overflow-x-auto no-scrollbar"></nav>
+
+      <!-- ปุ่มด้านขวา: โปรไฟล์/ตั้งค่า (บนมือถือ) และปุ่มสลับภาษา -->
+      <div id="nav-actions" class="flex items-center gap-1.5 shrink-0"></div>
+    </div>
+  </header>
+
+  <!-- พื้นที่เนื้อหาหลัก -->
+  <main id="app" class="max-w-5xl mx-auto px-4 pt-5 pb-28 md:pb-12"></main>
+
+  <!-- แถบเมนูด้านล่างสำหรับมือถือ -->
+  <nav id="nav-mobile" aria-label="เมนูมือถือ" class="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border-t border-zinc-200 dark:border-zinc-800 px-1.5 pt-1.5 pb-safe grid grid-cols-6 gap-0.5"></nav>
+
+  <!-- กล่อง Modal กลางจอสำหรับยืนยันและแก้ไขรายการ -->
+  <div id="modal-root"></div>
+
+  <!-- กล่องแจ้งเตือน Toast -->
+  <div id="toast-root" aria-live="polite" class="fixed top-16 right-4 left-4 sm:left-auto sm:w-96 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <script>
+  (() => {
+    'use strict';
+
+    /* ============================================================================
+     * 1. UTILITIES & DATE HELPERS (ฟังก์ชันช่วยจัดการ DOM, วันที่ และตัวเลข)
+     * ============================================================================ */
+    const $ = (s, p = document) => p.querySelector(s);
+    const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const pad = (n) => String(n).padStart(2, '0');
+    const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const todayStr = () => ymd(new Date());
+    const parseDate = (s) => {
+      const [y, m, d] = String(s).split('-').map(Number);
+      return new Date(y, (m || 1) - 1, d || 1);
+    };
+    const addDays = (s, n) => {
+      const d = parseDate(s);
+      d.setDate(d.getDate() + n);
+      return ymd(d);
+    };
+    const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
+    const r1 = (n) => Math.round((Number(n) || 0) * 10) / 10;
+    const nz = (v) => (v === '' || v == null ? null : Number(v));
+
+    // แปลข้อความไทย/อังกฤษตามการตั้งค่าภาษา
+    const L = (th, en) => (set.lang === 'en' ? en : th);
+    const fmt = (s, opts) => parseDate(s).toLocaleDateString(
+      set.lang === 'en' ? 'en-GB' : 'th-TH',
+      opts || { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }
+    );
+
+    /* ============================================================================
+     * 2. SVG ICONS & REUSABLE TAILWIND CLASSES
+     * ============================================================================ */
+    const ICONS = {
+      dash: '<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 10v10h14V10"/></svg>',
+      cal: '<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
+      nut: '<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>',
+      wo: '<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6.5 6.5 11 11"/><path d="m21 21-1-1"/><path d="m3 3 1 1"/><path d="m18 22 4-4"/><path d="m2 6 4-4"/><path d="m3 10 7-7"/><path d="m14 21 7-7"/></svg>',
+      body: '<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="1"/></svg>',
+      an: '<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>',
+      pf: '<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>',
+      set: '<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>',
+      plus: '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+      edit: '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+      trash: '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+      copy: '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+      water: '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>',
+      search: '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
+      close: '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
+    };
+
+    const CLS = {
+      card: 'bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-sm',
+      input: 'bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 transition min-h-[40px]',
+      btn: 'inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-700/80 active:scale-[0.98] transition cursor-pointer min-h-[40px]',
+      btnPrimary: 'inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm active:scale-[0.98] transition cursor-pointer min-h-[40px]',
+      btnIcon: 'p-2 rounded-lg text-zinc-500 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer',
+      btnDangerIcon: 'p-2 rounded-lg text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer'
+    };
+
+    /* ============================================================================
+     * 3. STORAGE LAYER (IndexedDB 'fitlog' v1 + Fallback อัตโนมัติไป localStorage)
+     * ============================================================================ */
+    const STORES = ['meals', 'workouts', 'cardio', 'body', 'days', 'foods'];
+    let db = null;
+    let useLSFallback = false;
+    const S = { meals: [], workouts: [], cardio: [], body: [], days: [], foods: [] };
+
+    const lsKey = (s) => `fitlog.ls.${s}`;
+
+    const openDB = () => new Promise((resolve) => {
+      if (!window.indexedDB) {
+        useLSFallback = true;
+        return resolve(null);
+      }
+      try {
+        const req = indexedDB.open('fitlog', 1);
+        req.onupgradeneeded = () => {
+          const d = req.result;
+          STORES.forEach(st => {
+            if (!d.objectStoreNames.contains(st)) d.createObjectStore(st, { keyPath: 'id' });
+          });
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => { useLSFallback = true; resolve(null); };
+      } catch (e) {
+        useLSFallback = true;
+        resolve(null);
+      }
+    });
+
+    const dbTx = (store, mode, fn) => new Promise((resolve, reject) => {
+      const tx = db.transaction(store, mode);
+      const req = fn(tx.objectStore(store));
+      tx.oncomplete = () => resolve(req && req.result);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+
+    const dbLoadAll = async () => {
+      if (useLSFallback || !db) {
+        STORES.forEach(st => {
+          try { S[st] = JSON.parse(localStorage.getItem(lsKey(st)) || '[]'); }
+          catch (e) { S[st] = []; }
+        });
+        return;
+      }
+      for (const st of STORES) {
+        S[st] = (await dbTx(st, 'readonly', o => o.getAll())) || [];
+      }
+    };
+
+    const dbPut = async (st, val) => {
+      if (useLSFallback || !db) {
+        const arr = S[st].filter(x => x.id !== val.id);
+        arr.push(val);
+        localStorage.setItem(lsKey(st), JSON.stringify(arr));
+        return;
+      }
+      await dbTx(st, 'readwrite', o => o.put(val));
+    };
+
+    const dbDelete = async (st, id) => {
+      if (useLSFallback || !db) {
+        const arr = S[st].filter(x => x.id !== id);
+        localStorage.setItem(lsKey(st), JSON.stringify(arr));
+        return;
+      }
+      await dbTx(st, 'readwrite', o => o.delete(id));
+    };
+
+    const dbReplaceAll = async (data) => {
+      if (useLSFallback || !db) {
+        STORES.forEach(st => {
+          localStorage.setItem(lsKey(st), JSON.stringify(Array.isArray(data[st]) ? data[st] : []));
+        });
+        return;
+      }
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORES, 'readwrite');
+        STORES.forEach(st => {
+          const o = tx.objectStore(st);
+          o.clear();
+          (data[st] || []).forEach(r => o.put(r));
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = tx.onabort = () => reject(tx.error);
+      });
+    };
+
+    /* ============================================================================
+     * 4. SETTINGS, THEME & BUILT-IN DATASETS (ตั้งค่า ธีม อาหาร และท่าออกกำลังกาย)
+     * ============================================================================ */
+    const DEFAULT_SET = () => ({
+      kcal: 2000, p: 120, c: 250, f: 65, water: 2000,
+      ws: 1, th: 'sys', bk: 0, lang: 'th', fav: [], pf: {}, gs: 0
+    });
+    let set = DEFAULT_SET();
+    try {
+      Object.assign(set, JSON.parse(localStorage.getItem('fitlog.set') || '{}'));
+      if (!Array.isArray(set.fav)) set.fav = [];
+      if (!set.pf || typeof set.pf !== 'object') set.pf = {};
+    } catch (e) {}
+
+    const saveSet = () => {
+      try { localStorage.setItem('fitlog.set', JSON.stringify(set)); } catch (e) {}
+    };
+
+    const sysDarkMQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    const applyTheme = () => {
+      const isDark = set.th === 'dark' || (set.th === 'sys' && sysDarkMQ && sysDarkMQ.matches);
+      document.documentElement.classList.toggle('dark', isDark);
+      document.documentElement.lang = set.lang === 'en' ? 'en' : 'th';
+    };
+    if (sysDarkMQ && sysDarkMQ.addEventListener) {
+      sysDarkMQ.addEventListener('change', () => { if (set.th === 'sys') applyTheme(); });
+    }
+
+    // หมวดหมู่อาหารทั้ง 7 หมวดหมู่
+    const FOOD_CATS = [
+      { id: 'all',     th: 'ทั้งหมด',        en: 'All',             badge: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300' },
+      { id: 'main',    th: 'เมนูหลัก',       en: 'Main Dish',       badge: 'bg-orange-100 text-orange-800 dark:bg-orange-950/60 dark:text-orange-300' },
+      { id: 'protein', th: 'เนื้อสัตว์',     en: 'Meat & Protein',  badge: 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300' },
+      { id: 'carb',    th: 'ข้าว & แป้ง',    en: 'Rice & Carbs',    badge: 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300' },
+      { id: 'veg',     th: 'ผัก & ผลไม้',    en: 'Veg & Fruit',     badge: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300' },
+      { id: 'drink',   th: 'เครื่องดื่ม & นม', en: 'Drinks & Dairy', badge: 'bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300' },
+      { id: 'dessert', th: 'ของหวาน & ขนม',  en: 'Dessert & Snack', badge: 'bg-pink-100 text-pink-800 dark:bg-pink-950/60 dark:text-pink-300' },
+      { id: 'other',   th: 'อื่นๆ',          en: 'Other',           badge: 'bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-300' }
+    ];
+    const getCatObj = (id) => FOOD_CATS.find(c => c.id === id) || FOOD_CATS[FOOD_CATS.length - 1];
+
+    // ฐานข้อมูลอาหารเริ่มต้น 46 รายการ แยกตามหมวดหมู่ (รวมอาหารต้นฉบับครบทั้ง 17 รายการ)
+    // รูปแบบ: [ชื่อไทย, ชื่ออังกฤษ, หมวด, หน่วยไทย, หน่วยอังกฤษ, kcal, P, C, F]
+    const FOODS = [
+      // เมนูหลัก (Main Dish)
+      ['ผัดกะเพราไก่ไข่ดาว (รวมข้าว)', 'Pad kra pao chicken with fried egg & rice', 'main', 'จาน', 'plate', 620, 28, 70, 25],
+      ['ต้มยำกุ้ง', 'Tom yum goong', 'main', 'ถ้วย', 'bowl', 120, 12, 6, 5],
+      ['ข้าวมันไก่ต้ม', 'Hainanese chicken rice', 'main', 'จาน', 'plate', 585, 25, 72, 21],
+      ['ข้าวหมูแดง', 'BBQ pork rice', 'main', 'จาน', 'plate', 540, 22, 74, 16],
+      ['ข้าวผัดหมู', 'Pork fried rice', 'main', 'จาน', 'plate', 560, 20, 68, 22],
+      ['ก๋วยเตี๋ยวน้ำใสหมู', 'Clear pork noodle soup', 'main', 'ชาม', 'bowl', 360, 18, 48, 9],
+      ['ผัดไทยกุ้งสด', 'Pad Thai with shrimp', 'main', 'จาน', 'plate', 550, 20, 68, 22],
+      ['ส้มตำไทย', 'Thai papaya salad (Som Tum)', 'main', 'จาน', 'plate', 120, 3, 22, 2.5],
+      ['แกงจืดเต้าหู้หมูสับ', 'Tofu & minced pork clear soup', 'main', 'ถ้วย', 'bowl', 150, 14, 6, 7],
+      ['สุกี้น้ำไก่', 'Thai chicken suki soup', 'main', 'ชาม', 'bowl', 340, 26, 38, 8],
+      ['ลาบไก่', 'Spicy minced chicken salad (Larb)', 'main', 'จาน', 'plate', 190, 25, 8, 6],
+      ['ยำวุ้นเส้นทะเล', 'Spicy glass noodle seafood salad', 'main', 'จาน', 'plate', 220, 15, 28, 4],
+
+      // เนื้อสัตว์ & โปรตีน (Meat & Protein)
+      ['อกไก่ต้ม', 'Boiled chicken breast', 'protein', '100 ก.', '100 g', 165, 31, 0, 3.6],
+      ['ไข่ต้ม', 'Boiled egg', 'protein', 'ฟอง', 'egg', 78, 6, 0.6, 5],
+      ['ไข่ดาว', 'Fried egg', 'protein', 'ฟอง', 'egg', 90, 6, 0.4, 7],
+      ['ไก่ย่าง', 'Grilled chicken', 'protein', '100 ก.', '100 g', 190, 27, 0, 9],
+      ['หมูย่าง', 'Grilled pork', 'protein', '100 ก.', '100 g', 230, 25, 0, 14],
+      ['แซลมอน', 'Salmon', 'protein', '100 ก.', '100 g', 208, 20, 0, 13],
+      ['กุ้งต้ม', 'Boiled shrimp', 'protein', '100 ก.', '100 g', 99, 24, 0.2, 0.3],
+      ['เนื้อวัวสันในย่าง', 'Grilled beef tenderloin', 'protein', '100 ก.', '100 g', 210, 29, 0, 10],
+      ['เต้าหู้ขาวอ่อน', 'Soft white tofu', 'protein', '100 ก.', '100 g', 76, 8, 2, 4.5],
+      ['ปลาทูน่าในน้ำแร่', 'Canned tuna in water', 'protein', '100 ก.', '100 g', 116, 26, 0, 1],
+
+      // ข้าว & แป้ง (Rice & Carbs)
+      ['ข้าวสวยจัสมิน', 'Jasmine rice', 'carb', 'ถ้วย (~160 ก.)', 'cup (~160 g)', 205, 4, 45, 0.4],
+      ['ข้าวเหนียว', 'Sticky rice', 'carb', 'ถ้วย (~150 ก.)', 'cup (~150 g)', 230, 5, 50, 0.5],
+      ['ข้าวกล้องสุก', 'Cooked brown rice', 'carb', 'ถ้วย (~160 ก.)', 'cup (~160 g)', 180, 4.5, 38, 1.5],
+      ['ข้าวโอ๊ต', 'Oats', 'carb', '40 ก.', '40 g', 150, 5, 27, 3],
+      ['ขนมปัง', 'Bread', 'carb', 'แผ่น', 'slice', 80, 3, 15, 1],
+      ['ขนมปังโฮลวีต', 'Whole wheat bread', 'carb', 'แผ่น', 'slice', 75, 4, 13, 1],
+      ['พาสต้าสุก', 'Cooked pasta', 'carb', 'ถ้วย', 'cup', 220, 8, 43, 1.3],
+      ['มันฝรั่งต้ม', 'Boiled potato', 'carb', '100 ก.', '100 g', 87, 2, 20, 0.1],
+      ['มันหวานญี่ปุ่นเผา', 'Baked sweet potato', 'carb', '100 ก.', '100 g', 90, 2, 21, 0.2],
+
+      // ผัก & ผลไม้ (Veg & Fruit)
+      ['กล้วย', 'Banana', 'veg', 'ลูก', 'piece', 105, 1.3, 27, 0.4],
+      ['แอปเปิ้ล', 'Apple', 'veg', 'ลูก', 'piece', 95, 0.5, 25, 0.3],
+      ['แตงโม', 'Watermelon', 'veg', '100 ก.', '100 g', 30, 0.6, 8, 0.2],
+      ['ฝรั่ง', 'Guava', 'veg', '100 ก.', '100 g', 68, 2.6, 14, 1],
+      ['บรอกโคลีต้ม', 'Boiled broccoli', 'veg', '100 ก.', '100 g', 35, 2.4, 7, 0.4],
+      ['สลัดผักรวม (ไม่ใส่น้ำสลัด)', 'Mixed green salad (no dressing)', 'veg', 'ชาม', 'bowl', 45, 2, 8, 0.5],
+
+      // เครื่องดื่ม & นม (Drinks & Dairy)
+      ['นมจืด', 'Whole milk', 'drink', 'แก้ว (240 มล.)', 'glass (240 ml)', 150, 8, 12, 8],
+      ['กรีกโยเกิร์ต', 'Greek yogurt', 'drink', 'ถ้วย (170 ก.)', 'cup (170 g)', 100, 17, 6, 0.7],
+      ['เวย์โปรตีน', 'Whey protein', 'drink', 'สกู๊ป', 'scoop', 120, 24, 3, 1.5],
+      ['อเมริกาโน่เย็นไม่หวาน', 'Iced Americano (unsweetened)', 'drink', 'แก้ว', 'glass', 15, 0, 2, 0],
+      ['ชาไทยเย็น (หวานปกติ)', 'Iced Thai milk tea', 'drink', 'แก้ว', 'glass', 320, 4, 48, 12],
+      ['น้ำเต้าหู้ไม่ใส่น้ำตาล', 'Unsweetened soy milk', 'drink', 'แก้ว (240 มล.)', 'glass (240 ml)', 80, 7, 4, 4],
+
+      // ของหวาน & ขนม (Dessert & Snack)
+      ['ข้าวเหนียวมะม่วง', 'Mango sticky rice', 'dessert', 'จาน', 'plate', 430, 6, 75, 12],
+      ['เค้กช็อกโกแลต', 'Chocolate cake', 'dessert', 'ชิ้น', 'slice', 350, 5, 48, 16],
+      ['ไอศกรีมวานิลลา', 'Vanilla ice cream', 'dessert', 'สกู๊ป', 'scoop', 140, 2.5, 16, 7],
+      ['บิงซู / น้ำแข็งไส', 'Bingsu / Shaved ice', 'dessert', 'ถ้วย', 'bowl', 380, 7, 65, 10],
+      ['มันฝรั่งทอดกรอบ', 'Potato chips', 'dessert', 'ซองเล็ก', 'small bag', 160, 2, 15, 10],
+      ['อัลมอนด์อบ', 'Roasted almonds', 'dessert', '30 ก.', '30 g', 175, 6, 6, 15]
+    ].map(a => ({ n: a[0], e: a[1], cat: a[2], u: a[3], ue: a[4], k: a[5], p: a[6], c: a[7], f: a[8], est: 1 }));
+
+    const EXERCISES = [
+      'Bench Press', 'Incline Dumbbell Press', 'Shoulder Press', 'Lat Pulldown',
+      'Seated Cable Row', 'Barbell Row', 'Squat', 'Leg Press', 'Romanian Deadlift',
+      'Leg Curl', 'Biceps Curl', 'Triceps Pushdown', 'Plank', 'Push-up', 'Pull-up'
+    ];
+
+    const MEAL_TYPES = [
+      { th: 'มื้อเช้า', en: 'Breakfast' },
+      { th: 'มื้อกลางวัน', en: 'Lunch' },
+      { th: 'มื้อเย็น', en: 'Dinner' },
+      { th: 'ของว่าง', en: 'Snack' }
+    ];
+
+    const CARDIO_TYPES = [
+      { th: 'วิ่ง', en: 'Run' },
+      { th: 'เดิน', en: 'Walk' },
+      { th: 'ปั่นจักรยาน', en: 'Cycling' },
+      { th: 'ว่ายน้ำ', en: 'Swimming' },
+      { th: 'อื่นๆ', en: 'Other' }
+    ];
+
+    const ACTIVITIES = [
+      ['1.2', 'นั่งทำงานเป็นหลัก', 'Mostly sedentary'],
+      ['1.375', 'ออกกำลังเบา 1-3 วัน/สัปดาห์', 'Light, 1-3 days/week'],
+      ['1.55', 'ปานกลาง 3-5 วัน/สัปดาห์', 'Moderate, 3-5 days/week'],
+      ['1.725', 'หนัก 6-7 วัน/สัปดาห์', 'Heavy, 6-7 days/week']
+    ];
+
+    const GOALS = [
+      ['lose', 'ลดน้ำหนัก', 'Lose weight'],
+      ['keep', 'คงน้ำหนัก', 'Maintain weight'],
+      ['gain', 'เพิ่มกล้ามเนื้อ', 'Build muscle']
+    ];
+
+    const PAGES = [
+      { id: 'dash', th: 'ภาพรวม', en: 'Overview', mobile: true },
+      { id: 'cal',  th: 'ปฏิทิน', en: 'Calendar', mobile: true },
+      { id: 'nut',  th: 'อาหาร', en: 'Food', mobile: true },
+      { id: 'wo',   th: 'เวิร์กเอาต์', en: 'Workout', mobile: true },
+      { id: 'body', th: 'ร่างกาย', en: 'Body', mobile: true },
+      { id: 'an',   th: 'วิเคราะห์', en: 'Analytics', mobile: true },
+      { id: 'pf',   th: 'โปรไฟล์', en: 'Profile', mobile: false },
+      { id: 'set',  th: 'ตั้งค่า', en: 'Settings', mobile: false }
+    ];
+
+    /* ============================================================================
+     * 5. FOOD & TEXT LOCALIZATION HELPERS
+     * ============================================================================ */
+    // รองรับหน่วย 100 กรัมหลายรูปแบบทั้งไทยและอังกฤษ (100 ก., 100ก., 100 g, 100g, 100 grams)
+    const isGramFood = (f) => {
+      if (!f || !f.u) return false;
+      const u = String(f.u).trim().toLowerCase();
+      return /^100\s*(ก\.|กรัม|g|gm|grams?)$/.test(u);
+    };
+
+    const foodName = (f) => (set.lang === 'en' && f.e ? f.e : f.n);
+    const foodUnit = (f) => (set.lang === 'en' && f.ue ? f.ue : storedFoodUnit(f.u));
+
+    const storedFoodName = (n) => {
+      if (set.lang !== 'en') return n;
+      const found = FOODS.find(f => f.n === n);
+      return found ? found.e : n;
+    };
+
+    const UNIT_EN_MAP = {
+      'ก.': 'g', 'กรัม': 'g', 'จาน': 'plate', 'ถ้วย': 'cup', 'ชาม': 'bowl',
+      'ฟอง': 'egg', 'ลูก': 'piece', 'ชิ้น': 'slice', 'แผ่น': 'slice',
+      'แก้ว': 'glass', 'สกู๊ป': 'scoop', 'กล่อง': 'box', 'หน่วย': 'unit',
+      'มล.': 'ml', 'ซองเล็ก': 'small bag', 'ครั้ง': 'serving'
+    };
+
+    const storedFoodUnit = (u) => {
+      if (set.lang !== 'en' || !u) return u || '';
+      const exactFood = FOODS.find(f => f.u === u);
+      if (exactFood && exactFood.ue) return exactFood.ue;
+      if (UNIT_EN_MAP[u]) return UNIT_EN_MAP[u];
+      return String(u)
+        .replace(/ถ้วย/g, 'cup').replace(/จาน/g, 'plate').replace(/ชาม/g, 'bowl')
+        .replace(/ฟอง/g, 'egg').replace(/ลูก/g, 'piece').replace(/ชิ้น/g, 'slice')
+        .replace(/แผ่น/g, 'slice').replace(/แก้ว/g, 'glass').replace(/สกู๊ป/g, 'scoop')
+        .replace(/กล่อง/g, 'box').replace(/ซองเล็ก/g, 'small bag').replace(/หน่วย/g, 'unit')
+        .replace(/ครั้ง/g, 'serving').replace(/มล\./g, 'ml').replace(/กรัม/g, 'g').replace(/ก\./g, 'g');
+    };
+
+    const mealLabel = (type) => {
+      const m = MEAL_TYPES.find(x => x.th === type);
+      return m ? L(m.th, m.en) : type;
+    };
+
+    const cardioLabel = (type) => {
+      const c = CARDIO_TYPES.find(x => x.th === type);
+      return c ? L(c.th, c.en) : type;
+    };
+
+    const fmtSet = (st) =>
+      `${st.reps}×${st.w ?? '-'}${st.rpe != null ? ` @${st.rpe}` : ''}${st.done === false ? L(' (ยังไม่เสร็จ)', ' (not done)') : ''}`;
+
+    /* ============================================================================
+     * 6. APPLICATION STATE & SELECTORS (สถานะและฟังก์ชันสรุปข้อมูล)
+     * ============================================================================ */
+    const defaultMealByHour = () => {
+      const h = new Date().getHours();
+      if (h < 11) return 'มื้อเช้า';
+      if (h < 15) return 'มื้อกลางวัน';
+      if (h < 20) return 'มื้อเย็น';
+      return 'ของว่าง';
+    };
+
+    let lastKnownToday = todayStr();
+    let page = 'dash';
+    let D = lastKnownToday;
+    let cm = lastKnownToday.slice(0, 7);
+    let F = { n: 1, w: 1, c: 1, b: 1 };
+    let fs = '';
+    let fcat = 'all';
+    let fsel = null;
+    let lastMealType = defaultMealByHour();
+    let draft = [];
+    draft.name = '';
+    draft.min = '';
+    let lastEx = { name: '', reps: '', w: '', rpe: '', done: true };
+    let pend = null;
+    let ed = null;
+    let bkTxt = '';
+    let rg = 30;
+    let cu = null;
+    let anBodyMetric = 'weight';
+    let busy = false;
+
+    // โหลดร่างเวิร์กเอาต์เดิมจาก localStorage
+    try {
+      const savedDraft = JSON.parse(localStorage.getItem('fitlog.draft') || 'null');
+      if (savedDraft) {
+        draft = Array.isArray(savedDraft.e) ? savedDraft.e : [];
+        draft.name = savedDraft.n || '';
+        draft.min = savedDraft.m != null ? String(savedDraft.m) : '';
+      }
+    } catch (e) {}
+
+    const saveDraft = () => {
+      try {
+        localStorage.setItem('fitlog.draft', JSON.stringify({
+          n: draft.name || '',
+          m: draft.min || '',
+          e: [...draft]
+        }));
+      } catch (e) {}
+    };
+
+    // ฟังก์ชันช่วยคำนวณข้อมูลตามวัน
+    const onDate = (store, d) => S[store].filter(x => x.date === d);
+    const dayRec = (d) => S.days.find(x => x.id === d) || { id: d };
+    const waterOf = (d) => Number(dayRec(d).water || 0);
+    const totNut = (d) => {
+      const t = { k: 0, p: 0, c: 0, f: 0 };
+      onDate('meals', d).forEach(m => (m.items || []).forEach(i => {
+        t.k += i.k || 0; t.p += i.p || 0; t.c += i.c || 0; t.f += i.f || 0;
+      }));
+      return t;
+    };
+    const mealSum = (m) => (m.items || []).reduce(
+      (a, i) => ({ k: a.k + (i.k || 0), p: a.p + (i.p || 0), c: a.c + (i.c || 0), f: a.f + (i.f || 0) }),
+      { k: 0, p: 0, c: 0, f: 0 }
+    );
+    const hasNut = (d) => onDate('meals', d).some(m => m.items && m.items.length > 0);
+    const countNut = (d) => hasNut(d) && dayRec(d).nut !== 'partial';
+    const hasAny = (d) => ({
+      n: hasNut(d),
+      w: onDate('workouts', d).length > 0,
+      c: onDate('cardio', d).length > 0,
+      b: onDate('body', d).length > 0
+    });
+    const calcVol = (w) => (w.exercises || []).reduce(
+      (sum, ex) => sum + (ex.sets || []).reduce(
+        (s2, st) => s2 + (st.done === false ? 0 : (st.w || 0) * (st.reps || 0)), 0
+      ), 0
+    );
+    const latestWeight = () => S.body.filter(b => b.weight != null).sort((a, b) => b.date.localeCompare(a.date))[0] || null;
+    const allFoods = () => [
+      ...S.foods.filter(f => !f.arch).map(f => ({ ...f, cat: f.cat || 'other', custom: 1 })),
+      ...FOODS
+    ];
+
+    // คำนวณแคลอรี่แนะนำด้วยสูตร Mifflin-St Jeor
+    const estimateKcal = () => {
+      const p = set.pf || {};
+      const w = latestWeight();
+      const age = p.by ? new Date().getFullYear() - p.by : 0;
+      if (!(w && p.h && age > 0 && age < 120 && (p.sx === 'm' || p.sx === 'f'))) return null;
+      const bmr = 10 * w.weight + 6.25 * p.h - 5 * age + (p.sx === 'm' ? 5 : -161);
+      const tdee = bmr * (+p.ac || 1.2);
+      const adj = p.gl === 'lose' ? -500 : p.gl === 'gain' ? 300 : 0;
+      return Math.max(1200, Math.round(tdee + adj));
+    };
+
+    // คำนวณสัดส่วนสารอาหารหลัก (P/C/F) อัตโนมัติตามน้ำหนักและเป้าหมาย
+    const estimateMacros = (kcal) => {
+      const p = set.pf || {};
+      const w = latestWeight();
+      const gl = p.gl || 'keep';
+      const protPerKg = gl === 'lose' ? 2.0 : gl === 'gain' ? 1.8 : 1.6;
+      const rawProt = w ? Math.round(w.weight * protPerKg) : Math.round((kcal * 0.3) / 4);
+      const protein = Math.min(rawProt, Math.round((kcal * 0.45) / 4));
+      const fat = Math.round((kcal * 0.25) / 9);
+      const carbs = Math.max(0, Math.round((kcal - protein * 4 - fat * 9) / 4));
+      return { p: protein, c: carbs, f: fat };
+    };
+
+    // ค้นหาสถิติครั้งล่าสุดของท่าออกกำลังกายที่กำลังพิมพ์ (Progressive Overload Hint)
+    const findLastExercise = (exName) => {
+      const key = String(exName || '').trim().toLowerCase();
+      if (!key) return null;
+      const sorted = [...S.workouts].sort((a, b) => b.date.localeCompare(a.date));
+      for (const w of sorted) {
+        const ex = (w.exercises || []).find(e => e.name.trim().toLowerCase() === key);
+        if (ex && ex.sets && ex.sets.length) {
+          const maxW = ex.sets.reduce((mx, st) => (st.w != null && st.w > mx ? st.w : mx), 0);
+          return { date: w.date, workoutName: w.name, sets: ex.sets, maxW };
+        }
+      }
+      return null;
+    };
+
+    const renderLastExHint = (exName) => {
+      const hit = findLastExercise(exName);
+      if (!hit) return '';
+      return `
+        <div class="px-3 py-2 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-800/50 text-xs text-emerald-900 dark:text-emerald-200 flex flex-wrap items-center justify-between gap-2 animate-fade">
+          <div>
+            <span class="font-bold">${L('ครั้งล่าสุด', 'Last time')}</span>
+            <span class="text-emerald-700/80 dark:text-emerald-300/80">(${fmt(hit.date, { day: 'numeric', month: 'short' })}):</span>
+            <span class="font-medium tabular-nums ml-1">${hit.sets.map(fmtSet).join(', ')}</span>
+          </div>
+          ${hit.maxW > 0 ? `<span class="px-2 py-0.5 rounded-md bg-white/80 dark:bg-zinc-900/60 font-semibold tabular-nums">${L('สูงสุด', 'Top')} ${hit.maxW} ${L('กก.', 'kg')}</span>` : ''}
+        </div>`;
+    };
+
+    /* ============================================================================
+     * 7. TOAST NOTIFICATION SYSTEM (กล่องแจ้งเตือน ไม่ใช้ alert)
+     * ============================================================================ */
+    const showToast = (text, tone = 'ok') => {
+      const root = $('#toast-root');
+      if (!root) return;
+      const colors = {
+        ok: 'bg-zinc-900 dark:bg-emerald-600 text-white border-zinc-800 dark:border-emerald-500',
+        error: 'bg-rose-600 text-white border-rose-500',
+        info: 'bg-blue-600 text-white border-blue-500'
+      };
+      const el = document.createElement('div');
+      el.className = `pointer-events-auto px-4 py-3 rounded-xl border shadow-lg text-sm font-medium flex items-center justify-between gap-3 animate-fade ${colors[tone] || colors.ok}`;
+      el.innerHTML = `<span>${esc(text)}</span><button type="button" class="opacity-70 hover:opacity-100 cursor-pointer" aria-label="close">${ICONS.close}</button>`;
+      el.querySelector('button').onclick = () => el.remove();
+      root.appendChild(el);
+      setTimeout(() => { el.remove(); }, 3400);
+    };
+
+    /* ============================================================================
+     * 8. SHARED UI COMPONENTS (แถบความคืบหน้า, ปุ่มเปลี่ยนวัน, ปุ่มจัดการ)
+     * ============================================================================ */
+    const progressBar = (val, goal, colorClass) => {
+      const pct = goal > 0 ? Math.min(100, Math.max(0, (val / goal) * 100)) : 0;
+      return `<div class="h-2 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+        <div class="h-full rounded-full transition-all duration-300 ${colorClass}" style="width:${pct.toFixed(1)}%"></div>
+      </div>`;
+    };
+
+    const datePickerBar = () => {
+      const T = todayStr();
+      return `
+        <div class="flex items-center gap-1.5 flex-wrap">
+          <button data-a="stepd" data-v="-1" aria-label="${L('วันก่อนหน้า', 'Previous day')}" class="${CLS.btn} !px-2.5 !min-h-[38px]">‹</button>
+          <input type="date" value="${D}" data-c="setd" aria-label="${L('วันที่', 'Date')}" class="${CLS.input} !py-1.5 !min-h-[38px]">
+          <button data-a="stepd" data-v="1" aria-label="${L('วันถัดไป', 'Next day')}" class="${CLS.btn} !px-2.5 !min-h-[38px]">›</button>
+          ${D !== T ? `<button data-a="today" class="${CLS.btn} !py-1.5 !px-3 !min-h-[38px] text-xs font-semibold text-emerald-600 dark:text-emerald-400">${L('วันนี้', 'Today')}</button>` : ''}
+        </div>`;
+    };
+
+    const actionBtns = (store, idVal) => {
+      const editVal = `${store}|${idVal.replace('#', '|')}`;
+      return `
+        <div class="inline-flex items-center gap-0.5 shrink-0">
+          <button data-a="ed" data-v="${editVal}" aria-label="${L('แก้ไข', 'Edit')}" class="${CLS.btnIcon}">${ICONS.edit}</button>
+          <button data-a="del" data-v="${store}|${idVal}" aria-label="${L('ลบ', 'Delete')}" class="${CLS.btnDangerIcon}">${ICONS.trash}</button>
+        </div>`;
+    };
+
+    const renderWaterCard = (dateKey, compact = false) => {
+      const cur = waterOf(dateKey);
+      const goal = Math.max(250, Number(set.water) || 2000);
+      const pct = Math.min(100, Math.round((cur / goal) * 100));
+      if (compact) {
+        return `
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-3 mt-3 border-t border-zinc-100 dark:border-zinc-800">
+            <div class="flex items-center gap-2 text-xs">
+              <span class="text-sky-500">${ICONS.water}</span>
+              <span class="font-semibold text-zinc-700 dark:text-zinc-200">${L('น้ำดื่ม', 'Water')}:</span>
+              <span class="font-bold text-sky-600 dark:text-sky-400 tabular-nums">${cur.toLocaleString()} / ${goal.toLocaleString()} ${L('มล.', 'ml')}</span>
+              <span class="text-zinc-400 tabular-nums">(${pct}%)</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <button data-a="water" data-v="${dateKey}|250" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200/70 dark:border-sky-800/60 hover:bg-sky-100 dark:hover:bg-sky-900/50 cursor-pointer">+250</button>
+              <button data-a="water" data-v="${dateKey}|500" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200/70 dark:border-sky-800/60 hover:bg-sky-100 dark:hover:bg-sky-900/50 cursor-pointer">+500</button>
+              ${cur > 0 ? `<button data-a="water" data-v="${dateKey}|-250" class="px-2 py-1 rounded-lg text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 cursor-pointer">-250</button>` : ''}
+              ${cur > 0 ? `<button data-a="water" data-v="${dateKey}|reset" class="px-2 py-1 rounded-lg text-xs text-zinc-400 hover:text-rose-500 cursor-pointer">${L('รีเซ็ต', 'Reset')}</button>` : ''}
+            </div>
+          </div>`;
+      }
+      return `
+        <div class="${CLS.card} flex flex-col justify-between gap-3">
+          <div>
+            <div class="flex items-center justify-between mb-1.5">
+              <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5">
+                <span class="text-sky-500">${ICONS.water}</span>
+                <span>${L('น้ำดื่มวันนี้', "Today's water")}</span>
+              </h2>
+              <span class="text-xs font-bold text-sky-600 dark:text-sky-400 tabular-nums">${pct}%</span>
+            </div>
+            <div class="text-2xl font-extrabold tabular-nums text-zinc-900 dark:text-white">
+              ${cur.toLocaleString()} <span class="text-sm font-normal text-zinc-500">/ ${goal.toLocaleString()} ${L('มล.', 'ml')}</span>
+            </div>
+            <div class="mt-2">${progressBar(cur, goal, 'bg-sky-500')}</div>
+          </div>
+          <div class="flex flex-wrap gap-1.5">
+            <button data-a="water" data-v="${dateKey}|250" class="flex-1 py-1.5 px-2 rounded-xl text-xs font-semibold bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200/70 dark:border-sky-800/60 hover:bg-sky-100 dark:hover:bg-sky-900/50 cursor-pointer">+250 ${L('มล.', 'ml')}</button>
+            <button data-a="water" data-v="${dateKey}|500" class="flex-1 py-1.5 px-2 rounded-xl text-xs font-semibold bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200/70 dark:border-sky-800/60 hover:bg-sky-100 dark:hover:bg-sky-900/50 cursor-pointer">+500 ${L('มล.', 'ml')}</button>
+            ${cur > 0 ? `<button data-a="water" data-v="${dateKey}|-250" class="py-1.5 px-2.5 rounded-xl text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 cursor-pointer">-250</button>` : ''}
+          </div>
+        </div>`;
+    };
+
+    /* ============================================================================
+     * 9. NAVIGATION RENDERER (แถบเมนู Desktop & Mobile)
+     * ============================================================================ */
+    const renderNav = () => {
+      $('#nav-desktop').innerHTML = PAGES.map(p => `
+        <button data-a="nav" data-v="${p.id}" ${p.id === page ? 'aria-current="page"' : ''}
+          class="px-3 py-1.5 rounded-xl text-sm font-medium transition cursor-pointer whitespace-nowrap
+          ${p.id === page
+            ? 'bg-emerald-600 text-white shadow-sm font-semibold'
+            : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800'}">
+          ${L(p.th, p.en)}
+        </button>`).join('');
+
+      $('#nav-actions').innerHTML = `
+        <button data-a="nav" data-v="pf" aria-label="${L('โปรไฟล์', 'Profile')}"
+          class="md:hidden p-2 rounded-xl transition cursor-pointer ${page === 'pf' ? 'bg-emerald-600 text-white' : 'text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800'}">
+          ${ICONS.pf}
+        </button>
+        <button data-a="nav" data-v="set" aria-label="${L('ตั้งค่า', 'Settings')}"
+          class="md:hidden p-2 rounded-xl transition cursor-pointer ${page === 'set' ? 'bg-emerald-600 text-white' : 'text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800'}">
+          ${ICONS.set}
+        </button>
+        <button data-a="lang" aria-label="Language"
+          class="px-2.5 py-1.5 rounded-xl text-xs font-bold border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer">
+          ${set.lang === 'en' ? 'ไทย' : 'EN'}
+        </button>`;
+
+      $('#nav-mobile').innerHTML = PAGES.filter(p => p.mobile).map(p => `
+        <button data-a="nav" data-v="${p.id}" ${p.id === page ? 'aria-current="page"' : ''}
+          class="flex flex-col items-center justify-center py-1 rounded-xl text-[11px] font-medium transition cursor-pointer
+          ${p.id === page
+            ? 'text-emerald-600 dark:text-emerald-400 font-semibold bg-emerald-50/70 dark:bg-emerald-950/40'
+            : 'text-zinc-500 dark:text-zinc-400'}">
+          ${ICONS[p.id]}
+          <span class="mt-0.5 truncate max-w-full">${L(p.th, p.en)}</span>
+        </button>`).join('');
+    };
+
+    /* ============================================================================
+     * 10. PAGE RENDERERS (8 หน้าหลัก)
+     * ============================================================================ */
+    const P = {};
+
+    /* --- 10.1 หน้าภาพรวม (Overview / Dashboard) --- */
+    P.dash = () => {
+      const T = todayStr();
+      const t = totNut(T);
+      const hasFood = hasNut(T);
+      const wToday = onDate('workouts', T);
+      const cToday = onDate('cardio', T);
+      const bw = latestWeight();
+      const rec = dayRec(T);
+
+      const last7 = [...Array(7)].map((_, i) => addDays(T, -i)).filter(countNut);
+      const avg7 = last7.length ? Math.round(last7.reduce((a, d) => a + totNut(d).k, 0) / last7.length) : null;
+      const backupOld = !set.bk || (Date.now() - set.bk > 6048e5);
+
+      const pctK = set.kcal > 0 ? Math.min(100, Math.round((t.k / set.kcal) * 100)) : 0;
+      const ringR = 26, ringC = 2 * Math.PI * ringR;
+      const ringOffset = ringC * (1 - pctK / 100);
+      const remainK = Math.round(set.kcal - t.k);
+
+      const gw = set.pf && set.pf.gw != null ? Number(set.pf.gw) : null;
+      const wDiff = bw && gw ? r1(bw.weight - gw) : null;
+
+      return `
+        <div class="space-y-5 animate-fade">
+          <div class="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                ${set.pf && set.pf.name ? `${L('สวัสดี', 'Hello')} ${esc(set.pf.name)}` : L('ภาพรวมวันนี้', "Today's overview")}
+              </p>
+              <h1 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-zinc-900 dark:text-white mt-0.5">${fmt(T)}</h1>
+            </div>
+          </div>
+
+          ${!set.gs ? `
+            <div class="rounded-2xl border border-amber-300/80 dark:border-amber-800/70 bg-amber-50/80 dark:bg-amber-950/30 p-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p class="font-bold text-sm text-amber-950 dark:text-amber-200">${L('ใช้เป้าหมายเริ่มต้น', 'Using default goals')} (${set.kcal.toLocaleString()} kcal)</p>
+                <p class="text-xs text-amber-800/90 dark:text-amber-300/80 mt-0.5">${L('ตั้งเป้าหมายของคุณเองได้ในหน้าโปรไฟล์หรือตั้งค่า', 'Set your own goals in Profile or Settings')}</p>
+              </div>
+              <button data-a="nav" data-v="pf" class="${CLS.btn} !py-1.5 !min-h-[36px] text-xs font-semibold">${L('ตั้งเป้าหมาย', 'Set goals')}</button>
+            </div>` : ''}
+
+          ${backupOld ? `
+            <div class="rounded-2xl border border-amber-300/80 dark:border-amber-800/70 bg-amber-50/80 dark:bg-amber-950/30 p-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p class="font-bold text-sm text-amber-950 dark:text-amber-200">${L('ถึงเวลาสำรองข้อมูล', 'Time to back up')}</p>
+                <p class="text-xs text-amber-800/90 dark:text-amber-300/80 mt-0.5">
+                  ${L('ข้อมูลเก็บไว้ในเบราว์เซอร์เครื่องนี้เท่านั้น', 'Your data is stored only in this browser')} ·
+                  ${set.bk
+                    ? `${L('ไฟล์สำรองล่าสุดสร้างเมื่อ', 'Last backup file created')} ${new Date(set.bk).toLocaleDateString(set.lang === 'en' ? 'en-GB' : 'th-TH')}`
+                    : L('ยังไม่เคยสร้างไฟล์สำรอง', 'No backup file yet')}
+                </p>
+              </div>
+              <button data-a="nav" data-v="set" class="${CLS.btnPrimary} !py-1.5 !min-h-[36px] text-xs">${L('ไปหน้าสำรองข้อมูล', 'Go to backup')}</button>
+            </div>` : ''}
+
+          <!-- ปุ่มลัดเพิ่มรายการด่วน -->
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            <button data-a="qa" data-v="nut" class="${CLS.btnPrimary} !justify-start px-3.5">${ICONS.plus}<span>${L('เพิ่มอาหาร', 'Add food')}</span></button>
+            <button data-a="qa" data-v="wo" class="${CLS.btn} !justify-start px-3.5">${ICONS.plus}<span>${L('เพิ่มเวิร์กเอาต์', 'Add workout')}</span></button>
+            <button data-a="qa" data-v="wo:cardio" class="${CLS.btn} !justify-start px-3.5">${ICONS.plus}<span>${L('เพิ่มคาร์ดิโอ', 'Add cardio')}</span></button>
+            <button data-a="qa" data-v="body" class="${CLS.btn} !justify-start px-3.5">${ICONS.plus}<span>${L('สัดส่วนร่างกาย', 'Add body')}</span></button>
+          </div>
+
+          <!-- การ์ดสรุปผล -->
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <!-- แคลอรี่วันนี้ -->
+            <div class="${CLS.card} flex flex-col justify-between">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">${L('แคลอรี่วันนี้', "Today's calories")}</h2>
+                  ${hasFood ? `
+                    <div class="text-3xl font-extrabold tabular-nums text-zinc-900 dark:text-white mt-2">
+                      ${Math.round(t.k).toLocaleString()}
+                      <span class="text-sm font-normal text-zinc-500">/ ${set.kcal.toLocaleString()}</span>
+                    </div>
+                  ` : `<p class="text-sm text-zinc-500 dark:text-zinc-400 mt-3">${L('ยังไม่ได้บันทึกอาหารวันนี้', 'No food logged today')}</p>`}
+                </div>
+                ${hasFood ? `
+                  <div class="relative w-16 h-16 shrink-0">
+                    <svg viewBox="0 0 64 64" class="w-16 h-16 -rotate-90">
+                      <circle cx="32" cy="32" r="${ringR}" fill="none" stroke="currentColor" stroke-width="6" class="text-zinc-100 dark:text-zinc-800"/>
+                      <circle cx="32" cy="32" r="${ringR}" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"
+                        class="${t.k > set.kcal ? 'text-rose-500' : 'text-blue-500'}"
+                        stroke-dasharray="${ringC.toFixed(1)}" stroke-dashoffset="${ringOffset.toFixed(1)}"/>
+                    </svg>
+                    <span class="absolute inset-0 flex items-center justify-center text-xs font-bold tabular-nums text-zinc-700 dark:text-zinc-200">${pctK}%</span>
+                  </div>` : ''}
+              </div>
+              ${hasFood ? `
+                <div class="mt-3 space-y-1.5">
+                  ${progressBar(t.k, set.kcal, t.k > set.kcal ? 'bg-rose-500' : 'bg-blue-500')}
+                  <p class="text-xs font-medium ${remainK < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-zinc-500 dark:text-zinc-400'} tabular-nums">
+                    ${remainK >= 0
+                      ? `${L('เหลืออีก', 'Remaining')} ${remainK.toLocaleString()} kcal`
+                      : `${L('เกินเป้าหมาย', 'Over goal')} ${Math.abs(remainK).toLocaleString()} kcal`}
+                  </p>
+                </div>` : ''}
+            </div>
+
+            <!-- สารอาหารหลัก -->
+            <div class="${CLS.card}">
+              <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-3">${L('สารอาหารหลัก', 'Macros')}</h2>
+              ${hasFood ? `
+                <div class="space-y-3">
+                  ${[
+                    [L('โปรตีน', 'Protein'), t.p, set.p, 'bg-emerald-500'],
+                    [L('คาร์บ', 'Carbs'), t.c, set.c, 'bg-amber-500'],
+                    [L('ไขมัน', 'Fat'), t.f, set.f, 'bg-rose-500']
+                  ].map(([name, val, goal, col]) => `
+                    <div>
+                      <div class="flex justify-between text-xs mb-1">
+                        <span class="font-medium text-zinc-700 dark:text-zinc-300">${name}</span>
+                        <span class="tabular-nums text-zinc-600 dark:text-zinc-400"><b class="text-zinc-900 dark:text-zinc-100">${r1(val)}</b> / ${goal} ${L('ก.', 'g')}</span>
+                      </div>
+                      ${progressBar(val, goal, col)}
+                    </div>`).join('')}
+                </div>
+              ` : `<p class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">${L('จะแสดงเมื่อมีบันทึกอาหาร', 'Shown once you log food')}</p>`}
+            </div>
+
+            <!-- การ์ดน้ำดื่มวันนี้ -->
+            ${renderWaterCard(T, false)}
+
+            <!-- การออกกำลังกายวันนี้ -->
+            <div class="${CLS.card}">
+              <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-3">${L('การออกกำลังกายวันนี้', "Today's activity")}</h2>
+              ${wToday.length || cToday.length ? `
+                <div class="space-y-2 text-sm">
+                  ${wToday.map(w => `
+                    <div class="p-2.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/60 dark:border-emerald-800/40">
+                      <div class="font-semibold text-zinc-900 dark:text-zinc-100">${esc(w.name)}</div>
+                      <div class="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 tabular-nums">
+                        ${w.exercises.length} ${L('ท่า', 'exercises')}${w.min ? ` · ${w.min} ${L('นาที', 'min')}` : ''} · ${L('วอลุ่ม', 'Volume')} ${calcVol(w).toLocaleString()} ${L('กก.', 'kg')}
+                      </div>
+                    </div>`).join('')}
+                  ${cToday.map(c => `
+                    <div class="p-2.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/40">
+                      <div class="font-semibold text-zinc-900 dark:text-zinc-100">${esc(cardioLabel(c.type))}</div>
+                      <div class="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 tabular-nums">
+                        ${c.km} ${L('กม.', 'km')} · ${c.min} ${L('นาที', 'min')}${c.hr ? ` · HR ${c.hr}` : ''}
+                      </div>
+                    </div>`).join('')}
+                </div>
+              ` : `<p class="text-sm text-zinc-500 dark:text-zinc-400">${rec.act === 'rest' ? L('วันนี้ตั้งเป็นวันพัก', 'Marked as a rest day') : L('ยังไม่มีบันทึก', 'No records yet')}</p>`}
+            </div>
+
+            <!-- น้ำหนักล่าสุด + เทียบเป้าหมาย -->
+            <div class="${CLS.card}">
+              <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-2">${L('น้ำหนักล่าสุด', 'Latest weight')}</h2>
+              ${bw ? `
+                <div class="text-3xl font-extrabold tabular-nums text-zinc-900 dark:text-white">
+                  ${bw.weight} <span class="text-sm font-normal text-zinc-500">${L('กก.', 'kg')}</span>
+                </div>
+                <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1">${fmt(bw.date, { day: 'numeric', month: 'short', year: 'numeric' })}</p>
+                ${gw != null ? `
+                  <div class="mt-3 pt-2.5 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between text-xs">
+                    <span class="text-zinc-500">${L('เป้าหมาย', 'Goal')}: <b class="text-zinc-800 dark:text-zinc-200 tabular-nums">${gw} ${L('กก.', 'kg')}</b></span>
+                    <span class="px-2 py-0.5 rounded-full font-semibold tabular-nums ${wDiff === 0 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300' : 'bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300'}">
+                      ${wDiff === 0 ? L('ถึงเป้าหมายแล้ว!', 'Goal reached!') : `${wDiff > 0 ? '+' : ''}${wDiff} ${L('กก.', 'kg')}`}
+                    </span>
+                  </div>` : ''}
+              ` : `<p class="text-sm text-zinc-500 dark:text-zinc-400">${L('ยังไม่มีข้อมูลน้ำหนัก', 'No weight data yet')}</p>`}
+            </div>
+
+            <!-- เฉลี่ย 7 วันล่าสุด -->
+            <div class="${CLS.card}">
+              <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-2">${L('7 วันล่าสุด', 'Last 7 days')}</h2>
+              ${avg7 != null ? `
+                <div class="text-3xl font-extrabold tabular-nums text-zinc-900 dark:text-white">
+                  ${avg7.toLocaleString()} <span class="text-sm font-normal text-zinc-500">kcal/${L('วัน', 'day')}</span>
+                </div>
+                <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1.5">
+                  ${L(`เฉลี่ยเฉพาะ ${last7.length} วันที่บันทึกครบ (ไม่นับวันบันทึกบางส่วน)`, `Averaged over ${last7.length} complete logged days (excluding partial)`)}
+                </p>
+              ` : `<p class="text-sm text-zinc-500 dark:text-zinc-400">${L('ต้องมีบันทึกอาหารก่อนจึงจะสรุปได้', 'Log some food to see a summary')}</p>`}
+            </div>
+          </div>
+        </div>`;
+    };
+
+    /* --- 10.2 หน้าปฏิทิน (Calendar) --- */
+    P.cal = () => {
+      const T = todayStr();
+      const [y, m] = cm.split('-').map(Number);
+      const firstDayOffset = (new Date(y, m - 1, 1).getDay() - set.ws + 7) % 7;
+      const daysInMonth = new Date(y, m, 0).getDate();
+      const wkHeaders = set.lang === 'en' ? ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'] : ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
+
+      const kinds = [
+        { k: 'n', th: 'โภชนาการ', en: 'Nutrition', dot: 'bg-blue-500' },
+        { k: 'w', th: 'เวิร์กเอาต์', en: 'Workout', dot: 'bg-emerald-500' },
+        { k: 'c', th: 'คาร์ดิโอ', en: 'Cardio', dot: 'bg-amber-500' },
+        { k: 'b', th: 'ร่างกาย', en: 'Body', dot: 'bg-violet-500' }
+      ];
+
+      let gridHtml = [...Array(7)].map((_, i) =>
+        `<div class="text-center text-xs font-semibold text-zinc-400 py-1">${wkHeaders[(set.ws + i) % 7]}</div>`
+      ).join('') + '<div></div>'.repeat(firstDayOffset);
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const s = `${cm}-${pad(d)}`;
+        const h = hasAny(s);
+        const activeKinds = kinds.filter(k => F[k.k] && h[k.k]);
+        const isSel = s === D;
+        const isToday = s === T;
+        gridHtml += `
+          <button data-a="sd" data-v="${s}" aria-label="${d} ${activeKinds.map(k => L(k.th, k.en)).join(', ') || L('ไม่มีบันทึก', 'No records')}"
+            class="aspect-square min-h-[44px] rounded-xl p-1.5 flex flex-col justify-between items-start border text-sm transition cursor-pointer
+            ${isSel
+              ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm font-bold'
+              : isToday
+                ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-500 text-zinc-900 dark:text-white font-semibold'
+                : 'bg-white dark:bg-zinc-900 border-zinc-200/80 dark:border-zinc-800 text-zinc-700 dark:text-zinc-200 hover:border-zinc-300 dark:hover:border-zinc-700'}">
+            <span class="text-xs sm:text-sm leading-none tabular-nums">${d}</span>
+            <span class="flex gap-1 flex-wrap">
+              ${activeKinds.map(k => `<span class="w-1.5 h-1.5 rounded-full ${isSel ? 'bg-white' : k.dot}"></span>`).join('')}
+            </span>
+          </button>`;
+      }
+
+      // รายละเอียดของวันที่เลือก
+      const ms = onDate('meals', D);
+      const ws = onDate('workouts', D);
+      const cs = onDate('cardio', D);
+      const bs = onDate('body', D);
+      const t = totNut(D);
+      const r = dayRec(D);
+      const wMl = waterOf(D);
+
+      const wkStartOffset = (parseDate(D).getDay() - set.ws + 7) % 7;
+      const wkDays = [...Array(7)].map((_, i) => addDays(D, i - wkStartOffset));
+      const wkWorkDays = wkDays.filter(d => onDate('workouts', d).length).length;
+      const wkCardio = wkDays.flatMap(d => onDate('cardio', d));
+      const wkNutDays = wkDays.filter(countNut);
+
+      return `
+        <div class="space-y-5 animate-fade">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h1 class="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">
+              ${parseDate(`${cm}-01`).toLocaleDateString(set.lang === 'en' ? 'en-GB' : 'th-TH', { month: 'long', year: 'numeric' })}
+            </h1>
+            <div class="flex items-center gap-1.5">
+              <button data-a="mm" data-v="-1" aria-label="${L('เดือนก่อน', 'Previous month')}" class="${CLS.btn} !px-3">‹</button>
+              <button data-a="today" class="${CLS.btn} !px-3.5 text-xs font-semibold">${L('วันนี้', 'Today')}</button>
+              <button data-a="mm" data-v="1" aria-label="${L('เดือนถัดไป', 'Next month')}" class="${CLS.btn} !px-3">›</button>
+            </div>
+          </div>
+
+          <!-- ตัวกรองจุดสี -->
+          <div class="flex flex-wrap gap-2">
+            ${kinds.map(k => `
+              <label class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border cursor-pointer select-none transition
+                ${F[k.k]
+                  ? 'bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 text-zinc-800 dark:text-zinc-100 shadow-sm'
+                  : 'bg-zinc-100/70 dark:bg-zinc-900/40 border-transparent text-zinc-400'}">
+                <input type="checkbox" data-c="flt" data-v="${k.k}" ${F[k.k] ? 'checked' : ''} class="sr-only">
+                <span class="w-2.5 h-2.5 rounded-full ${k.dot}"></span>
+                <span>${L(k.th, k.en)}</span>
+              </label>`).join('')}
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+            <!-- กริดปฏิทิน -->
+            <div class="${CLS.card} lg:col-span-6">
+              <div class="grid grid-cols-7 gap-1.5">${gridHtml}</div>
+            </div>
+
+            <!-- รายละเอียดของวันที่เลือก -->
+            <div class="${CLS.card} lg:col-span-6 space-y-4">
+              <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-zinc-100 dark:border-zinc-800">
+                <h2 class="text-base font-bold text-zinc-900 dark:text-white">${fmt(D)}</h2>
+                <div class="flex flex-wrap gap-1.5">
+                  <button data-a="qa" data-v="nut" class="${CLS.btn} !py-1 !px-2.5 !min-h-[32px] text-xs">+ ${L('อาหาร', 'Food')}</button>
+                  <button data-a="qa" data-v="wo" class="${CLS.btn} !py-1 !px-2.5 !min-h-[32px] text-xs">+ ${L('เวท', 'Lift')}</button>
+                  <button data-a="qa" data-v="wo:cardio" class="${CLS.btn} !py-1 !px-2.5 !min-h-[32px] text-xs">+ ${L('คาร์ดิโอ', 'Cardio')}</button>
+                  <button data-a="qa" data-v="body" class="${CLS.btn} !py-1 !px-2.5 !min-h-[32px] text-xs">+ ${L('ร่างกาย', 'Body')}</button>
+                </div>
+              </div>
+
+              <!-- สถานะวันและโน้ตประจำวัน (Auto-save แบบเงียบ) -->
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <label class="block">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('สถานะอาหาร', 'Nutrition status')}</span>
+                  <select data-c="st" data-k="nut" class="${CLS.input} !w-full">
+                    <option value="">${L('ยังไม่ได้ตั้ง', 'Not set')}</option>
+                    <option value="partial" ${r.nut === 'partial' ? 'selected' : ''}>${L('บันทึกบางส่วน', 'Partial')}</option>
+                    <option value="complete" ${r.nut === 'complete' ? 'selected' : ''}>${L('บันทึกครบ', 'Complete')}</option>
+                  </select>
+                </label>
+                <label class="block">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('กิจกรรม', 'Activity')}</span>
+                  <select data-c="st" data-k="act" class="${CLS.input} !w-full">
+                    <option value="">${L('ยังไม่ได้ตั้ง', 'Not set')}</option>
+                    <option value="training" ${r.act === 'training' ? 'selected' : ''}>${L('วันฝึก', 'Training day')}</option>
+                    <option value="rest" ${r.act === 'rest' ? 'selected' : ''}>${L('วันพัก', 'Rest day')}</option>
+                    <option value="other" ${r.act === 'other' ? 'selected' : ''}>${L('อื่นๆ', 'Other')}</option>
+                  </select>
+                </label>
+              </div>
+
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400">${L('โน้ตประจำวัน', 'Daily note')}</span>
+                  <span id="note-status" class="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium"></span>
+                </div>
+                <textarea rows="2" data-note="${D}" placeholder="${L('จดบันทึกเพิ่มเติมของวันนี้...', 'Write a daily note...')}" class="${CLS.input} !w-full">${esc(r.note || '')}</textarea>
+              </div>
+
+              ${wMl > 0 ? `
+                <div class="flex items-center gap-2 text-xs px-3 py-2 rounded-xl bg-sky-50/70 dark:bg-sky-950/30 text-sky-700 dark:text-sky-300 border border-sky-200/60 dark:border-sky-800/40">
+                  <span>${ICONS.water}</span>
+                  <span>${L('น้ำดื่มวันนี้', 'Water logged')}: <b class="tabular-nums">${wMl.toLocaleString()} ${L('มล.', 'ml')}</b></span>
+                </div>` : ''}
+
+              <!-- รายการอาหารของวันนี้ พร้อมยอดรวมรายมื้อ -->
+              ${ms.length ? `
+                <div>
+                  <h3 class="text-xs font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400 mb-2">
+                    ${L('อาหาร', 'Food')} · ${Math.round(t.k).toLocaleString()} kcal
+                  </h3>
+                  <div class="space-y-2.5">
+                    ${ms.map(m => {
+                      const sm = mealSum(m);
+                      return `
+                        <div class="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-100 dark:border-zinc-800/80">
+                          <div class="flex items-center justify-between text-xs font-bold text-zinc-700 dark:text-zinc-300 pb-1.5 mb-1.5 border-b border-zinc-200/70 dark:border-zinc-800">
+                            <span>${esc(mealLabel(m.type))}</span>
+                            <span class="tabular-nums text-blue-600 dark:text-blue-400">${Math.round(sm.k).toLocaleString()} kcal</span>
+                          </div>
+                          <div class="divide-y divide-zinc-200/60 dark:divide-zinc-800/80">
+                            ${m.items.map(i => `
+                              <div class="flex items-center justify-between gap-2 py-1.5 first:pt-0 last:pb-0 text-sm">
+                                <div class="min-w-0">
+                                  <span class="font-medium text-zinc-900 dark:text-zinc-100">${esc(storedFoodName(i.n))}</span>
+                                  <span class="text-zinc-500 text-xs ml-1 tabular-nums">× ${i.q} ${esc(storedFoodUnit(i.u))}</span>
+                                </div>
+                                <div class="flex items-center gap-1.5 shrink-0">
+                                  <span class="text-xs font-semibold tabular-nums text-zinc-700 dark:text-zinc-300">${Math.round(i.k)} kcal</span>
+                                  ${actionBtns('meals', `${m.id}#${i.id}`)}
+                                </div>
+                              </div>`).join('')}
+                          </div>
+                        </div>`;
+                    }).join('')}
+                  </div>
+                </div>` : ''}
+
+              <!-- เวิร์กเอาต์ของวันนี้ -->
+              ${ws.length ? `
+                <div>
+                  <h3 class="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 mb-2">${L('เวิร์กเอาต์', 'Workout')}</h3>
+                  <div class="space-y-2">
+                    ${ws.map(w => `
+                      <div class="flex items-start justify-between gap-2 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-100 dark:border-zinc-800/80">
+                        <div class="min-w-0">
+                          <div class="font-semibold text-sm text-zinc-900 dark:text-zinc-100">
+                            ${esc(w.name)}${w.min ? ` <span class="text-xs font-normal text-zinc-500 tabular-nums">(${w.min} ${L('นาที', 'min')})</span>` : ''}
+                          </div>
+                          <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
+                            ${w.exercises.map(e => `<b>${esc(e.name)}</b>: ${e.sets.map(fmtSet).join(', ')}`).join(' · ')}
+                          </p>
+                        </div>
+                        ${actionBtns('workouts', w.id)}
+                      </div>`).join('')}
+                  </div>
+                </div>` : ''}
+
+              <!-- คาร์ดิโอของวันนี้ -->
+              ${cs.length ? `
+                <div>
+                  <h3 class="text-xs font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400 mb-2">${L('คาร์ดิโอ', 'Cardio')}</h3>
+                  <div class="space-y-2">
+                    ${cs.map(c => `
+                      <div class="flex items-center justify-between gap-2 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-100 dark:border-zinc-800/80 text-sm">
+                        <div class="tabular-nums">
+                          <span class="font-semibold text-zinc-900 dark:text-zinc-100">${esc(cardioLabel(c.type))}</span>
+                          <span class="text-zinc-600 dark:text-zinc-400 ml-1">${c.km} ${L('กม.', 'km')} · ${c.min} ${L('นาที', 'min')} (${c.km ? r1(c.min / c.km) : '-'} ${L('นาที/กม.', 'min/km')})${c.hr ? ` · HR ${c.hr}` : ''}</span>
+                        </div>
+                        ${actionBtns('cardio', c.id)}
+                      </div>`).join('')}
+                  </div>
+                </div>` : ''}
+
+              <!-- สัดส่วนร่างกายของวันนี้ -->
+              ${bs.length ? `
+                <div>
+                  <h3 class="text-xs font-bold uppercase tracking-wider text-violet-600 dark:text-violet-400 mb-2">${L('ร่างกาย', 'Body')}</h3>
+                  <div class="space-y-2">
+                    ${bs.map(b => `
+                      <div class="flex items-center justify-between gap-2 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-100 dark:border-zinc-800/80 text-sm tabular-nums">
+                        <span>
+                          ${L('น้ำหนัก', 'Weight')} <b>${b.weight ?? '-'}</b> ${L('กก.', 'kg')} ·
+                          ${L('ไขมัน', 'Fat')} <b>${b.fat ?? '-'}</b>% ·
+                          ${L('เอว', 'Waist')} <b>${b.waist ?? '-'}</b> ${L('ซม.', 'cm')}
+                        </span>
+                        ${actionBtns('body', b.id)}
+                      </div>`).join('')}
+                  </div>
+                </div>` : ''}
+
+              ${!ms.length && !ws.length && !cs.length && !bs.length ? `<p class="text-sm text-zinc-500 text-center py-4">${L('ยังไม่มีบันทึกในวันนี้', 'No records for this day')}</p>` : ''}
+
+              <!-- สรุปสัปดาห์นี้ -->
+              <div class="pt-3 border-t border-zinc-100 dark:border-zinc-800">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">${L('สรุปสัปดาห์นี้', 'This week')}</h3>
+                <p class="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed tabular-nums">
+                  ${L('วันฝึก', 'Workout days')} <b>${wkWorkDays}</b> ${L('วัน', 'd')} ·
+                  ${L('คาร์ดิโอ', 'Cardio')} <b>${r1(wkCardio.reduce((a, c) => a + c.km, 0))}</b> ${L('กม.', 'km')} (${wkCardio.reduce((a, c) => a + c.min, 0)} ${L('นาที', 'min')}) ·
+                  ${L('บันทึกอาหารครบ', 'Food logged')} <b>${wkNutDays.length}</b> ${L('วัน', 'd')} ·
+                  ${L('เฉลี่ย', 'Avg')} <b>${wkNutDays.length ? `${Math.round(wkNutDays.reduce((a, d) => a + totNut(d).k, 0) / wkNutDays.length).toLocaleString()} kcal` : '-'}</b>
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>`;
+    };
+
+    /* --- 10.3 หน้าอาหาร (Nutrition) --- */
+    const renderFoodResults = () => {
+      const q = fs.trim().toLowerCase();
+      const af = allFoods();
+      const indexed = af.map((f, i) => ({ f, i }));
+      const catFiltered = fcat === 'all' ? indexed : indexed.filter(x => (x.f.cat || 'other') === fcat);
+      const recentNames = [...new Set(
+        [...S.meals].sort((a, b) => b.date.localeCompare(a.date)).flatMap(m => m.items.map(i => i.n))
+      )];
+
+      let list;
+      if (q) {
+        list = catFiltered.filter(x =>
+          `${x.f.n} ${x.f.e || ''} ${getCatObj(x.f.cat).th} ${getCatObj(x.f.cat).en}`.toLowerCase().includes(q)
+        );
+      } else {
+        const favs = set.fav || [];
+        const priorityNames = [...new Set([...favs, ...recentNames])];
+        const top = priorityNames.map(n => catFiltered.find(x => x.f.n === n)).filter(Boolean);
+        const rest = catFiltered.filter(x => !priorityNames.includes(x.f.n));
+        list = [...top, ...rest];
+      }
+
+      const shown = list.slice(0, q || fcat !== 'all' ? 30 : 18);
+      if (!shown.length) {
+        return `<p class="text-sm text-zinc-500 py-2">${L('ไม่พบอาหารในหมวดนี้ ลองเปลี่ยนคำค้นหาหรือเพิ่มอาหารของคุณเองด้านล่าง', 'No food found. Try another search or add your own below.')}</p>`;
+      }
+
+      return shown.map(x => {
+        const isFav = (set.fav || []).includes(x.f.n);
+        const isSel = fsel && fsel.n === x.f.n && fsel.u === x.f.u;
+        const catObj = getCatObj(x.f.cat);
+        return `
+          <button data-a="pick" data-v="${x.i}"
+            class="text-left px-3 py-2 rounded-xl border text-xs sm:text-sm transition cursor-pointer flex items-center gap-2
+            ${isSel
+              ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+              : 'bg-zinc-50 dark:bg-zinc-950/70 border-zinc-200 dark:border-zinc-800 hover:border-emerald-400 dark:hover:border-emerald-600 text-zinc-800 dark:text-zinc-100'}">
+            <span class="font-medium">${isFav ? '<span class="text-amber-400 mr-0.5">★</span>' : ''}${esc(foodName(x.f))}</span>
+            <span class="text-[11px] px-1.5 py-0.5 rounded-md ${isSel ? 'bg-white/20 text-white' : catObj.badge}">${L(catObj.th, catObj.en)}</span>
+            <span class="text-xs tabular-nums ${isSel ? 'text-emerald-100' : 'text-zinc-500'}">${x.f.k} kcal/${esc(foodUnit(x.f))}</span>
+          </button>`;
+      }).join('');
+    };
+
+    const renderFoodPicker = () => {
+      if (!fsel) {
+        return `<div class="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-950/50 border border-dashed border-zinc-200 dark:border-zinc-800 text-xs text-zinc-500 text-center">
+          ${L('แตะเลือกอาหารจากรายการด้านบนเพื่อใส่ปริมาณและเพิ่มลงมื้ออาหาร', 'Tap a food item above to set quantity and log it')}
+        </div>`;
+      }
+      const isFav = (set.fav || []).includes(fsel.n);
+      const gramMode = isGramFood(fsel);
+      const initQty = gramMode ? 100 : 1;
+      const quickAmts = gramMode ? [50, 100, 150, 200] : [0.5, 1, 1.5, 2];
+      const catObj = getCatObj(fsel.cat);
+
+      return `
+        <div class="p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/25 border border-emerald-200 dark:border-emerald-800/60 space-y-3 animate-fade">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="font-bold text-zinc-900 dark:text-white">${esc(foodName(fsel))}</span>
+                <span class="text-[11px] px-2 py-0.5 rounded-full font-medium ${catObj.badge}">${L(catObj.th, catObj.en)}</span>
+              </div>
+              <p class="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 tabular-nums">
+                ${fsel.k} kcal · P ${fsel.p} · C ${fsel.c} · F ${fsel.f} ${L('ต่อ', 'per')} ${esc(foodUnit(fsel))}${fsel.est ? L(' (ค่าประมาณ)', ' (est.)') : ''}
+              </p>
+            </div>
+            <button data-a="fav" aria-pressed="${isFav}" class="${CLS.btn} !py-1.5 !px-3 !min-h-[34px] text-xs">
+              ${isFav ? `★ ${L('รายการโปรด', 'Favorite')}` : `☆ ${L('ตั้งเป็นรายการโปรด', 'Add to favorites')}`}
+            </button>
+          </div>
+
+          <!-- ปุ่มเลือกปริมาณด่วน + คำนวณแคลอรี่สด -->
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="text-xs text-zinc-500">${L('ปริมาณด่วน:', 'Quick:')}</span>
+              ${quickAmts.map(q => `
+                <button data-a="setfq" data-v="${q}" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-white dark:bg-zinc-900 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 cursor-pointer tabular-nums">
+                  ${q}${gramMode ? L(' ก.', ' g') : '×'}
+                </button>`).join('')}
+            </div>
+            <div id="fq-preview" class="text-xs font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">
+              = ${Math.round(fsel.k)} kcal · P ${r1(fsel.p)} · C ${r1(fsel.c)} · F ${r1(fsel.f)}
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="flex items-center gap-1.5">
+              <input id="fq" type="number" step="any" min="0" value="${initQty}" aria-label="${L('จำนวน', 'Quantity')}" class="${CLS.input} !w-24 tabular-nums">
+              <span class="text-sm font-medium text-zinc-600 dark:text-zinc-300">${gramMode ? L('กรัม', 'grams') : esc(foodUnit(fsel))}</span>
+            </div>
+            <select id="ft" class="${CLS.input} !w-auto">
+              ${MEAL_TYPES.map(m => `<option value="${m.th}" ${m.th === lastMealType ? 'selected' : ''}>${L(m.th, m.en)}</option>`).join('')}
+            </select>
+            <input id="ftc" placeholder="${L('ชื่อมื้อเอง (ไม่บังคับ)', 'Custom meal name (optional)')}" class="${CLS.input} flex-1 min-w-[160px]">
+            <button data-a="addfood" class="${CLS.btnPrimary} w-full sm:w-auto">${ICONS.plus}<span>${L('เพิ่มลงวันที่เลือก', 'Add to selected date')}</span></button>
+          </div>
+        </div>`;
+    };
+
+    const updateFoodPreview = () => {
+      if (!fsel) return;
+      const el = $('#fq-preview');
+      const q = Number($('#fq')?.value || 0);
+      if (!el) return;
+      const mul = isGramFood(fsel) ? q / 100 : q;
+      el.textContent = `= ${Math.round(fsel.k * mul)} kcal · P ${r1(fsel.p * mul)} · C ${r1(fsel.c * mul)} · F ${r1(fsel.f * mul)}`;
+    };
+
+    P.nut = () => {
+      const dayMeals = onDate('meals', D);
+      const t = totNut(D);
+      const af = allFoods();
+      const customFoods = S.foods.filter(f => !f.arch);
+      const prevFoodDates = [...new Set(S.meals.filter(m => m.date !== D && m.items.length).map(m => m.date))]
+        .sort((a, b) => b.localeCompare(a)).slice(0, 10);
+
+      return `
+        <div class="space-y-5 animate-fade">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h1 class="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">${L('อาหาร', 'Food')}</h1>
+            ${datePickerBar()}
+          </div>
+
+          <!-- แถบสรุปแคลอรี่ มาโคร และน้ำดื่มของวันที่เลือก -->
+          <div class="${CLS.card} !p-4">
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 items-center">
+              <div>
+                <div class="text-xs text-zinc-500 dark:text-zinc-400">${L('แคลอรี่วันนี้', 'Calories')}</div>
+                <div class="text-lg font-extrabold tabular-nums text-zinc-900 dark:text-white">${Math.round(t.k).toLocaleString()} <span class="text-xs font-normal text-zinc-500">/ ${set.kcal.toLocaleString()}</span></div>
+                <div class="mt-1">${progressBar(t.k, set.kcal, t.k > set.kcal ? 'bg-rose-500' : 'bg-blue-500')}</div>
+              </div>
+              <div>
+                <div class="text-xs text-zinc-500 dark:text-zinc-400">${L('โปรตีน', 'Protein')}</div>
+                <div class="text-base font-bold tabular-nums text-zinc-900 dark:text-white">${r1(t.p)} <span class="text-xs font-normal text-zinc-500">/ ${set.p} ${L('ก.', 'g')}</span></div>
+                <div class="mt-1">${progressBar(t.p, set.p, 'bg-emerald-500')}</div>
+              </div>
+              <div>
+                <div class="text-xs text-zinc-500 dark:text-zinc-400">${L('คาร์บ', 'Carbs')}</div>
+                <div class="text-base font-bold tabular-nums text-zinc-900 dark:text-white">${r1(t.c)} <span class="text-xs font-normal text-zinc-500">/ ${set.c} ${L('ก.', 'g')}</span></div>
+                <div class="mt-1">${progressBar(t.c, set.c, 'bg-amber-500')}</div>
+              </div>
+              <div>
+                <div class="text-xs text-zinc-500 dark:text-zinc-400">${L('ไขมัน', 'Fat')}</div>
+                <div class="text-base font-bold tabular-nums text-zinc-900 dark:text-white">${r1(t.f)} <span class="text-xs font-normal text-zinc-500">/ ${set.f} ${L('ก.', 'g')}</span></div>
+                <div class="mt-1">${progressBar(t.f, set.f, 'bg-rose-500')}</div>
+              </div>
+            </div>
+            ${renderWaterCard(D, true)}
+          </div>
+
+          <!-- ค้นหาและเลือกหมวดหมู่อาหาร -->
+          <div class="${CLS.card} space-y-3.5">
+            <div>
+              <h2 class="text-base font-bold text-zinc-900 dark:text-white">${L('ค้นหาอาหาร', 'Search food')}</h2>
+              <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">${L('เลือกหมวดหมู่หรือพิมพ์ค้นหาด้วยชื่อไทย/อังกฤษ หากไม่พิมพ์จะแสดงรายการโปรด (★) และอาหารที่ใช้ล่าสุดก่อน', 'Filter by category or search in Thai/English. Empty search shows favorites (★) and recent foods.')}</p>
+            </div>
+
+            <!-- ช่องค้นหาพร้อมปุ่มล้างคำค้น -->
+            <div class="relative">
+              <span class="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none">${ICONS.search}</span>
+              <input id="fsr" value="${esc(fs)}" placeholder="${L('ค้นหาชื่ออาหาร เช่น กะเพรา, อกไก่, ข้าวเหนียวมะม่วง...', 'Search e.g. chicken, rice, salmon...')}" class="${CLS.input} !w-full !pl-9 !pr-9">
+              ${fs ? `<button data-a="clrfs" aria-label="${L('ล้างคำค้น', 'Clear search')}" class="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-lg text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 cursor-pointer">${ICONS.close}</button>` : ''}
+            </div>
+
+            <!-- แท็บกรองหมวดหมู่อาหาร -->
+            <div class="flex flex-wrap gap-1.5">
+              ${FOOD_CATS.map(c => {
+                const cnt = c.id === 'all' ? af.length : af.filter(f => (f.cat || 'other') === c.id).length;
+                const active = fcat === c.id;
+                return `
+                  <button data-a="fcat" data-v="${c.id}"
+                    class="px-3 py-1.5 rounded-full text-xs font-semibold border transition cursor-pointer inline-flex items-center gap-1.5
+                    ${active
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                      : 'bg-zinc-50 dark:bg-zinc-950/60 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800 hover:border-emerald-400'}">
+                    <span>${L(c.th, c.en)}</span>
+                    <span class="px-1.5 py-0.5 rounded-full text-[10px] tabular-nums ${active ? 'bg-white/20 text-white' : 'bg-zinc-200/70 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400'}">${cnt}</span>
+                  </button>`;
+              }).join('')}
+            </div>
+
+            <div id="res" class="flex flex-wrap gap-2">${renderFoodResults()}</div>
+            <div id="pick" class="pt-1">${renderFoodPicker()}</div>
+          </div>
+
+          <!-- เพิ่มแคลอรี่ด่วน (Quick Add) -->
+          <details class="${CLS.card} !p-4 group">
+            <summary class="flex items-center justify-between gap-2 cursor-pointer list-none select-none">
+              <div>
+                <h2 class="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-1.5">
+                  <span class="text-emerald-600 dark:text-emerald-400">⚡</span>
+                  <span>${L('เพิ่มแคลอรี่ด่วน (Quick Add)', 'Quick Add Calories')}</span>
+                </h2>
+                <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">${L('บันทึกแคลอรี่จากฉลากโดยไม่ต้องเพิ่มลงรายการอาหารส่วนตัว', 'Log calories directly without saving a custom food')}</p>
+              </div>
+              <span class="text-xs font-semibold text-emerald-600 dark:text-emerald-400 group-open:rotate-180 transition-transform">▼</span>
+            </summary>
+            <div class="grid grid-cols-2 sm:grid-cols-12 gap-2.5 mt-3.5 pt-3.5 border-t border-zinc-100 dark:border-zinc-800 items-end">
+              <label class="block col-span-2 sm:col-span-4">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ชื่อรายการ (ไม่บังคับ)', 'Label (optional)')}</span>
+                <input id="qn" placeholder="${L('เช่น ขนมซอง, มื้อนอกบ้าน', 'e.g. Packaged snack')}" class="${CLS.input} !w-full">
+              </label>
+              <label class="block col-span-1 sm:col-span-2">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">kcal *</span>
+                <input id="qk" type="number" step="any" min="0" placeholder="250" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block col-span-1 sm:col-span-2">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('มื้ออาหาร', 'Meal')}</span>
+                <select id="qft" class="${CLS.input} !w-full">
+                  ${MEAL_TYPES.map(m => `<option value="${m.th}" ${m.th === lastMealType ? 'selected' : ''}>${L(m.th, m.en)}</option>`).join('')}
+                </select>
+              </label>
+              <div class="col-span-2 sm:col-span-4 grid grid-cols-3 gap-1.5">
+                <label class="block">
+                  <span class="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 block mb-1">P (${L('ก.', 'g')})</span>
+                  <input id="qp" type="number" step="any" min="0" placeholder="0" class="${CLS.input} !w-full !px-2 text-center tabular-nums">
+                </label>
+                <label class="block">
+                  <span class="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 block mb-1">C (${L('ก.', 'g')})</span>
+                  <input id="qc" type="number" step="any" min="0" placeholder="0" class="${CLS.input} !w-full !px-2 text-center tabular-nums">
+                </label>
+                <label class="block">
+                  <span class="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 block mb-1">F (${L('ก.', 'g')})</span>
+                  <input id="qf" type="number" step="any" min="0" placeholder="0" class="${CLS.input} !w-full !px-2 text-center tabular-nums">
+                </label>
+              </div>
+              <div class="col-span-2 sm:col-span-12">
+                <button data-a="quickadd" class="${CLS.btnPrimary} w-full sm:w-auto">${ICONS.plus}<span>${L('เพิ่มแคลอรี่ด่วนลงวันนี้', 'Quick add to date')}</span></button>
+              </div>
+            </div>
+          </details>
+
+          <!-- บันทึกของวันที่เลือก พร้อมปุ่มคัดลอกมื้อจากวันก่อน -->
+          <div class="${CLS.card} space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <h2 class="text-base font-bold text-zinc-900 dark:text-white">${L('บันทึกของวันที่เลือก', 'Records for selected date')}</h2>
+              ${prevFoodDates.length ? `
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <select id="copy-meal-date" class="${CLS.input} !py-1 !text-xs !min-h-[34px]">
+                    ${prevFoodDates.map(dt => `<option value="${dt}">${fmt(dt, { day: 'numeric', month: 'short' })} (${Math.round(totNut(dt).k)} kcal)</option>`).join('')}
+                  </select>
+                  <button data-a="copymeals" class="${CLS.btn} !py-1 !px-2.5 !min-h-[34px] text-xs">${ICONS.copy}<span>${L('คัดลอกมื้อมาวันนี้', 'Copy meals')}</span></button>
+                </div>` : ''}
+            </div>
+
+            ${dayMeals.length ? `
+              <div class="space-y-3">
+                ${dayMeals.map(m => {
+                  const sm = mealSum(m);
+                  return `
+                    <div class="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-100 dark:border-zinc-800/80">
+                      <div class="flex flex-wrap items-center justify-between gap-2 pb-2 mb-2 border-b border-zinc-200/70 dark:border-zinc-800">
+                        <span class="text-sm font-bold text-zinc-800 dark:text-zinc-100">${esc(mealLabel(m.type))}</span>
+                        <span class="text-xs font-semibold tabular-nums text-blue-600 dark:text-blue-400">
+                          ${Math.round(sm.k).toLocaleString()} kcal · P ${r1(sm.p)} · C ${r1(sm.c)} · F ${r1(sm.f)}
+                        </span>
+                      </div>
+                      <div class="divide-y divide-zinc-200/60 dark:divide-zinc-800/80">
+                        ${m.items.map(i => `
+                          <div class="flex items-center justify-between gap-2 py-2 first:pt-0 last:pb-0 text-sm">
+                            <div class="min-w-0">
+                              <div class="font-medium text-zinc-900 dark:text-zinc-100">${esc(storedFoodName(i.n))} <span class="text-xs text-zinc-500 font-normal tabular-nums">× ${i.q} ${esc(storedFoodUnit(i.u))}</span></div>
+                              <div class="text-xs text-zinc-400 tabular-nums">P ${r1(i.p)} · C ${r1(i.c)} · F ${r1(i.f)}</div>
+                            </div>
+                            <div class="flex items-center gap-2 shrink-0">
+                              <span class="text-sm font-bold tabular-nums text-zinc-800 dark:text-zinc-200">${Math.round(i.k)} kcal</span>
+                              ${actionBtns('meals', `${m.id}#${i.id}`)}
+                            </div>
+                          </div>`).join('')}
+                      </div>
+                    </div>`;
+                }).join('')}
+              </div>
+            ` : `<p class="text-sm text-zinc-500 text-center py-6">${L('ยังไม่มีอาหารในวันนี้', 'No food for this day')}</p>`}
+          </div>
+
+          <!-- เพิ่มและจัดการอาหารของคุณเอง -->
+          <div class="${CLS.card} space-y-4">
+            <div>
+              <h2 class="text-base font-bold text-zinc-900 dark:text-white">${L('เพิ่มอาหารของคุณเอง', 'Add your own food')}</h2>
+              <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">${L('หากใส่หน่วยเป็น "100 ก." หรือ "100 g" ระบบจะคำนวณตามน้ำหนักกรัมให้อัตโนมัติ', 'Use "100 g" as unit for automatic per-gram scaling.')}</p>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-12 gap-2.5 items-end">
+              <label class="block col-span-2 sm:col-span-4">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ชื่ออาหาร *', 'Food name *')}</span>
+                <input id="cn" placeholder="${L('เช่น ข้าวไข่เจียวหมูสับ', 'e.g. Pork omelet rice')}" class="${CLS.input} !w-full">
+              </label>
+              <label class="block col-span-1 sm:col-span-3">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('หมวดหมู่', 'Category')}</span>
+                <select id="ccat" class="${CLS.input} !w-full">
+                  ${FOOD_CATS.filter(c => c.id !== 'all').map(c => `<option value="${c.id}">${L(c.th, c.en)}</option>`).join('')}
+                </select>
+              </label>
+              <label class="block col-span-1 sm:col-span-2">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('หน่วย', 'Unit')}</span>
+                <input id="cu" placeholder="${L('จาน / 100 ก.', 'plate / 100 g')}" class="${CLS.input} !w-full">
+              </label>
+              <label class="block col-span-2 sm:col-span-3">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">kcal *</span>
+                <input id="ck" type="number" step="any" min="0" placeholder="0" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block col-span-2 sm:col-span-4">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('โปรตีน (ก.)', 'Protein (g)')}</span>
+                <input id="cp" type="number" step="any" min="0" placeholder="0" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block col-span-1 sm:col-span-4">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('คาร์บ (ก.)', 'Carbs (g)')}</span>
+                <input id="cc" type="number" step="any" min="0" placeholder="0" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block col-span-1 sm:col-span-4">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ไขมัน (ก.)', 'Fat (g)')}</span>
+                <input id="cf" type="number" step="any" min="0" placeholder="0" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <div class="col-span-2 sm:col-span-12">
+                <button data-a="newfood" class="${CLS.btnPrimary} w-full sm:w-auto">${ICONS.plus}<span>${L('บันทึกอาหาร', 'Save food')}</span></button>
+              </div>
+            </div>
+
+            ${customFoods.length ? `
+              <div class="pt-3 border-t border-zinc-100 dark:border-zinc-800">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-2">${L('อาหารที่คุณสร้างเอง', 'Your custom foods')} (${customFoods.length})</h3>
+                <div class="divide-y divide-zinc-100 dark:divide-zinc-800">
+                  ${customFoods.map(f => {
+                    const catObj = getCatObj(f.cat);
+                    return `
+                      <div class="flex items-center justify-between gap-2 py-2.5 text-sm">
+                        <div class="min-w-0">
+                          <div class="flex flex-wrap items-center gap-1.5">
+                            <span class="font-semibold text-zinc-900 dark:text-zinc-100">${esc(f.n)}</span>
+                            <span class="text-[11px] px-1.5 py-0.5 rounded-md ${catObj.badge}">${L(catObj.th, catObj.en)}</span>
+                          </div>
+                          <div class="text-xs text-zinc-500 tabular-nums mt-0.5">${f.k} kcal / ${esc(storedFoodUnit(f.u))} · P ${f.p} · C ${f.c} · F ${f.f}</div>
+                        </div>
+                        ${actionBtns('foods', f.id)}
+                      </div>`;
+                  }).join('')}
+                </div>
+              </div>` : ''}
+          </div>
+        </div>`;
+    };
+
+    /* --- 10.4 หน้าเวิร์กเอาต์และคาร์ดิโอ (Workout) --- */
+    P.wo = () => {
+      const dayW = onDate('workouts', D);
+      const dayC = onDate('cardio', D);
+      const recentWorkouts = [...S.workouts].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
+
+      return `
+        <div class="space-y-5 animate-fade">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h1 class="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">${L('เวิร์กเอาต์', 'Workout')}</h1>
+            ${datePickerBar()}
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+            <!-- เวทเทรนนิ่ง -->
+            <div class="${CLS.card} lg:col-span-7 space-y-4">
+              <div>
+                <h2 class="text-base font-bold text-zinc-900 dark:text-white">${L('เวทเทรนนิ่ง', 'Strength training')}</h2>
+                <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">${L('วอลุ่มคำนวณจาก น้ำหนัก × ครั้ง เฉพาะเซ็ตที่ใส่น้ำหนักและทำเสร็จแล้ว (ถือเป็นน้ำหนักรวมที่ยกจริง)', 'Volume = weight × reps for completed sets with weight logged.')}</p>
+              </div>
+
+              <!-- โหลดรูทีนจากเวิร์กเอาต์ที่ผ่านมา -->
+              ${recentWorkouts.length ? `
+                <div class="flex flex-wrap items-center gap-2 p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-200/70 dark:border-zinc-800">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400">${L('คัดลอกรูทีนเดิม:', 'Load previous routine:')}</span>
+                  <select id="copy-wo-src" class="${CLS.input} !py-1.5 !text-xs !min-h-[34px] flex-1 min-w-[160px]">
+                    ${recentWorkouts.map(w => `<option value="${w.id}">${esc(w.name)} (${fmt(w.date, { day: 'numeric', month: 'short' })} · ${w.exercises.length} ${L('ท่า', 'ex')})</option>`).join('')}
+                  </select>
+                  <button data-a="loadw" class="${CLS.btn} !py-1.5 !px-3 !min-h-[34px] text-xs">${ICONS.copy}<span>${L('โหลดลงร่าง', 'Load draft')}</span></button>
+                </div>` : ''}
+
+              <!-- ชื่อเซสชันและเวลาที่ออกกำลังกาย (พิมพ์เองได้เลย) -->
+              <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                <label class="block sm:col-span-8">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ชื่อเซสชัน', 'Session name')}</span>
+                  <input id="wn" value="${esc(draft.name || '')}" placeholder="${L('เช่น Push Day, เล่นขา', 'e.g. Push Day, Leg Day')}" class="${CLS.input} !w-full">
+                </label>
+                <label class="block sm:col-span-4">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('เวลาที่ออกกำลังกาย (นาที)', 'Duration (min)')}</span>
+                  <input id="wdur" type="number" step="any" min="0" value="${esc(draft.min || '')}" placeholder="${L('เช่น 45', 'e.g. 45')}" class="${CLS.input} !w-full tabular-nums">
+                </label>
+              </div>
+
+              <!-- กรอกท่าและเซ็ต (จำค่าล่าสุดเพื่อให้กดเพิ่มเซ็ตต่อเนื่องได้ง่าย) -->
+              <div class="grid grid-cols-2 sm:grid-cols-12 gap-2.5 items-end">
+                <label class="block col-span-2 sm:col-span-5">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ท่าออกกำลังกาย', 'Exercise')}</span>
+                  <input id="en" list="exl" value="${esc(lastEx.name)}" placeholder="${L('เลือกหรือพิมพ์ชื่อท่า', 'Choose or type exercise')}" class="${CLS.input} !w-full">
+                  <datalist id="exl">${EXERCISES.map(e => `<option value="${e}">`).join('')}</datalist>
+                </label>
+                <label class="block sm:col-span-2">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ครั้ง', 'Reps')}</span>
+                  <input id="er" type="number" min="1" value="${esc(lastEx.reps)}" placeholder="10" class="${CLS.input} !w-full tabular-nums">
+                </label>
+                <label class="block sm:col-span-2">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('น้ำหนัก (กก.)', 'Weight (kg)')}</span>
+                  <input id="ew" type="number" step="any" min="0" value="${esc(lastEx.w)}" placeholder="0" class="${CLS.input} !w-full tabular-nums">
+                </label>
+                <label class="block sm:col-span-3">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">RPE (1–10)</span>
+                  <input id="erpe" type="number" min="1" max="10" step="0.5" value="${esc(lastEx.rpe)}" placeholder="-" class="${CLS.input} !w-full tabular-nums">
+                </label>
+              </div>
+
+              <!-- สถิติครั้งล่าสุดของท่าที่กำลังเล่น (Progressive Overload Hint) -->
+              <div id="last-ex-hint">${renderLastExHint(lastEx.name)}</div>
+
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <label class="inline-flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer select-none">
+                  <input id="edone" type="checkbox" ${lastEx.done !== false ? 'checked' : ''} class="w-4 h-4 rounded accent-emerald-600">
+                  <span>${L('เสร็จแล้ว', 'Done')}</span>
+                </label>
+                <button data-a="addset" class="${CLS.btn}">${ICONS.plus}<span>${L('เพิ่มเซ็ต', 'Add set')}</span></button>
+              </div>
+
+              <!-- รายการร่างเซ็ตที่เพิ่มไว้ -->
+              ${draft.length ? `
+                <div class="space-y-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                  ${draft.map((ex, ei) => `
+                    <div class="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-200/70 dark:border-zinc-800">
+                      <div class="font-semibold text-sm text-zinc-900 dark:text-zinc-100 mb-1.5">${esc(ex.name)}</div>
+                      <div class="flex flex-wrap gap-1.5">
+                        ${ex.sets.map((st, si) => `
+                          <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 tabular-nums">
+                            <span>${fmtSet(st)}</span>
+                            <button data-a="rmset" data-v="${ei}|${si}" aria-label="${L('ลบเซ็ต', 'Remove set')}" class="text-zinc-400 hover:text-rose-500 ml-0.5 cursor-pointer">×</button>
+                          </span>`).join('')}
+                      </div>
+                    </div>`).join('')}
+                </div>` : ''}
+
+              <div class="flex flex-wrap gap-2 pt-1">
+                <button data-a="savew" class="${CLS.btnPrimary}">${L('บันทึกเวิร์กเอาต์', 'Save workout')}</button>
+                ${draft.length ? `<button data-a="clr" class="${CLS.btn}">${L('ล้างร่าง', 'Clear draft')}</button>` : ''}
+              </div>
+            </div>
+
+            <!-- คาร์ดิโอ -->
+            <div id="cardio-card" class="${CLS.card} lg:col-span-5 space-y-4">
+              <h2 class="text-base font-bold text-zinc-900 dark:text-white">${L('คาร์ดิโอ', 'Cardio')}</h2>
+              <div class="grid grid-cols-2 gap-2.5">
+                <label class="block col-span-2">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ประเภทกิจกรรม', 'Activity type')}</span>
+                  <select id="cy" class="${CLS.input} !w-full">
+                    ${CARDIO_TYPES.map(c => `<option value="${c.th}">${L(c.th, c.en)}</option>`).join('')}
+                  </select>
+                </label>
+                <label class="block">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ระยะทาง (กม.)', 'Distance (km)')}</span>
+                  <input id="cd" type="number" step="any" min="0" placeholder="5.0" class="${CLS.input} !w-full tabular-nums">
+                </label>
+                <label class="block">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('เวลา (นาที)', 'Time (min)')}</span>
+                  <input id="cm" type="number" step="any" min="0" placeholder="30" class="${CLS.input} !w-full tabular-nums">
+                </label>
+                <label class="block col-span-2">
+                  <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('อัตราการเต้นหัวใจเฉลี่ย HR (ไม่บังคับ)', 'Avg HR bpm (optional)')}</span>
+                  <input id="chr" type="number" min="0" placeholder="145" class="${CLS.input} !w-full tabular-nums">
+                </label>
+              </div>
+              <button data-a="savec" class="${CLS.btnPrimary} w-full">${L('บันทึกคาร์ดิโอ', 'Save cardio')}</button>
+            </div>
+          </div>
+
+          <!-- บันทึกของวันที่เลือก -->
+          <div class="${CLS.card} space-y-3">
+            <h2 class="text-base font-bold text-zinc-900 dark:text-white">${L('บันทึกของวันที่เลือก', 'Records for selected date')}</h2>
+            ${dayW.length || dayC.length ? `
+              <div class="divide-y divide-zinc-100 dark:divide-zinc-800">
+                ${dayW.map(w => `
+                  <div class="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                    <div class="min-w-0">
+                      <div class="font-semibold text-sm text-zinc-900 dark:text-white">${esc(w.name)}</div>
+                      <div class="text-xs text-zinc-500 dark:text-zinc-400 tabular-nums mt-0.5">
+                        ${w.exercises.length} ${L('ท่า', 'exercises')}${w.min ? ` · ${w.min} ${L('นาที', 'min')}` : ''} · ${L('วอลุ่ม', 'Volume')} ${calcVol(w).toLocaleString()} ${L('กก.', 'kg')}
+                      </div>
+                    </div>
+                    ${actionBtns('workouts', w.id)}
+                  </div>`).join('')}
+                ${dayC.map(c => `
+                  <div class="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                    <div class="min-w-0">
+                      <div class="font-semibold text-sm text-zinc-900 dark:text-white">${esc(cardioLabel(c.type))}</div>
+                      <div class="text-xs text-zinc-500 dark:text-zinc-400 tabular-nums mt-0.5">
+                        ${c.km} ${L('กม.', 'km')} · ${c.min} ${L('นาที', 'min')} (${c.km ? r1(c.min / c.km) : '-'} ${L('นาที/กม.', 'min/km')})${c.hr ? ` · HR ${c.hr}` : ''}
+                      </div>
+                    </div>
+                    ${actionBtns('cardio', c.id)}
+                  </div>`).join('')}
+              </div>
+            ` : `<p class="text-sm text-zinc-500 text-center py-4">${L('ยังไม่มีบันทึกในวันนี้', 'No records for this day')}</p>`}
+          </div>
+        </div>`;
+    };
+
+    /* --- 10.5 หน้าร่างกาย (Body) --- */
+    P.body = () => {
+      const history = [...S.body].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 15);
+      return `
+        <div class="space-y-5 animate-fade">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h1 class="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">${L('ร่างกาย', 'Body')}</h1>
+            ${datePickerBar()}
+          </div>
+
+          <div class="${CLS.card} space-y-3">
+            <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+              <label class="block">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('น้ำหนัก (กก.)', 'Weight (kg)')}</span>
+                <input id="bw" type="number" step="any" min="0" placeholder="65.5" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ไขมันในร่างกาย (%)', 'Body fat (%)')}</span>
+                <input id="bf" type="number" step="any" min="0" max="100" placeholder="18.0" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('รอบเอว (ซม.)', 'Waist (cm)')}</span>
+                <input id="bs" type="number" step="any" min="0" placeholder="80.0" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <button data-a="saveb" class="${CLS.btnPrimary} w-full">${L('บันทึก', 'Save')}</button>
+            </div>
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">${L('ช่องที่เว้นว่างจะไม่ถูกนับเป็นศูนย์', 'Blank fields are not counted as zero')}</p>
+          </div>
+
+          <div class="${CLS.card} space-y-3">
+            <h2 class="text-base font-bold text-zinc-900 dark:text-white">${L('ประวัติล่าสุด', 'Recent history')}</h2>
+            ${history.length ? `
+              <div class="divide-y divide-zinc-100 dark:divide-zinc-800">
+                ${history.map(b => `
+                  <div class="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0 text-sm">
+                    <div class="tabular-nums">
+                      <span class="font-semibold text-zinc-900 dark:text-white">${fmt(b.date, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                      <span class="text-zinc-500 dark:text-zinc-400 ml-2">
+                        ${b.weight ?? '-'} ${L('กก.', 'kg')} · ${L('ไขมัน', 'Fat')} ${b.fat ?? '-'}% · ${L('เอว', 'Waist')} ${b.waist ?? '-'} ${L('ซม.', 'cm')}
+                      </span>
+                    </div>
+                    ${actionBtns('body', b.id)}
+                  </div>`).join('')}
+              </div>
+            ` : `<p class="text-sm text-zinc-500 text-center py-6">${L('ยังไม่มีข้อมูล', 'No data yet')}</p>`}
+          </div>
+        </div>`;
+    };
+
+    /* --- 10.6 หน้าวิเคราะห์ (Analytics) --- */
+    P.an = () => {
+      const T = todayStr();
+      const hasCustom = !!(cu && (cu.a || cu.b));
+      const badCustom = !!(cu && cu.a && cu.b && cu.a > cu.b);
+      const ok = !!(cu && cu.a && cu.b && cu.a <= cu.b);
+      const n = ok ? Math.min(366, Math.round((parseDate(cu.b) - parseDate(cu.a)) / 864e5) + 1) : rg;
+      const end = ok ? cu.b : T;
+      const ds = [...Array(n)].map((_, i) => addDays(end, i + 1 - n));
+      const start = ds[0];
+      const inRange = (d) => d >= start && d <= end;
+
+      const completeDays = ds.filter(countNut);
+      const nutTotals = completeDays.map(d => totNut(d));
+      const avgK = completeDays.length ? Math.round(nutTotals.reduce((a, x) => a + x.k, 0) / completeDays.length) : null;
+      const avgP = completeDays.length ? r1(nutTotals.reduce((a, x) => a + x.p, 0) / completeDays.length) : null;
+      const avgC = completeDays.length ? r1(nutTotals.reduce((a, x) => a + x.c, 0) / completeDays.length) : null;
+      const avgF = completeDays.length ? r1(nutTotals.reduce((a, x) => a + x.f, 0) / completeDays.length) : null;
+
+      const allLoggedKs = ds.filter(hasNut).map(d => totNut(d).k);
+      const wk = S.workouts.filter(w => inRange(w.date));
+      const wkTotalMin = wk.reduce((a, w) => a + (w.min || 0), 0);
+      const cd = S.cardio.filter(c => inRange(c.date));
+
+      const BODY_METRICS = {
+        weight: { th: 'น้ำหนัก (กก.)', en: 'Weight (kg)', unit: L('กก.', 'kg'), stroke: 'text-violet-500 dark:text-violet-400', fill: 'fill-violet-600 dark:fill-violet-400', tip: 'text-violet-600 dark:text-violet-400' },
+        fat:    { th: 'ไขมัน (%)',     en: 'Body fat (%)', unit: '%',            stroke: 'text-amber-500 dark:text-amber-400',   fill: 'fill-amber-500 dark:fill-amber-400',   tip: 'text-amber-600 dark:text-amber-400' },
+        waist:  { th: 'รอบเอว (ซม.)',  en: 'Waist (cm)',   unit: L('ซม.', 'cm'), stroke: 'text-teal-500 dark:text-teal-400',     fill: 'fill-teal-600 dark:fill-teal-400',     tip: 'text-teal-600 dark:text-teal-400' }
+      };
+      const bm = BODY_METRICS[anBodyMetric] || BODY_METRICS.weight;
+      const bodySeries = S.body
+        .filter(b => b[anBodyMetric] != null && inRange(b.date))
+        .sort((x, y) => x.date.localeCompare(y.date));
+
+      // กราฟ SVG แคลอรี่รายวัน (maxK นับรวมวันบันทึกบางส่วนไม่ให้ล้นกรอบ + จำกัดความกว้างแท่งสูงสุด)
+      const W = 640, H = 160, padY = 18;
+      const u = W / n;
+      const maxK = Math.max(set.kcal, ...allLoggedKs, 1);
+      const goalY = H - (set.kcal / maxK) * (H - padY);
+      const barWidth = Math.min(36, Math.max(3, u - 2));
+
+      const barsSvg = ds.map((d, i) => {
+        if (!hasNut(d)) return '';
+        const k = totNut(d).k;
+        const h = Math.max(3, (k / maxK) * (H - padY));
+        const isPartial = dayRec(d).nut === 'partial';
+        const bx = i * u + (u - barWidth) / 2;
+        return `<rect x="${bx.toFixed(1)}" y="${(H - h).toFixed(1)}" width="${barWidth.toFixed(1)}" height="${h.toFixed(1)}" rx="3"
+          data-a="tipk" data-v="${d}|${Math.round(k)}|${isPartial ? 1 : 0}"
+          class="cursor-pointer ${isPartial ? 'fill-blue-300 dark:fill-blue-800' : 'fill-blue-500 dark:fill-blue-400'} hover:opacity-80 transition-opacity">
+          <title>${d}: ${Math.round(k)} kcal${isPartial ? L(' (บางส่วน)', ' (partial)') : ''}</title>
+        </rect>`;
+      }).join('') + `
+        <line x1="0" x2="${W}" y1="${goalY.toFixed(1)}" y2="${goalY.toFixed(1)}" stroke="currentColor" class="text-zinc-400 dark:text-zinc-500 pointer-events-none" stroke-width="1.5" stroke-dasharray="5 5"/>
+        <text x="${W - 4}" y="${Math.max(12, goalY - 5).toFixed(1)}" text-anchor="end" class="fill-zinc-500 dark:fill-zinc-400 text-[11px] font-medium pointer-events-none">${set.kcal} kcal</text>`;
+
+      // กราฟ SVG สัดส่วนร่างกาย (จัดกึ่งกลางเมื่อมีค่าเดียวหรือค่าเท่ากัน)
+      const bVals = bodySeries.map(b => b[anBodyMetric]);
+      const minB = bVals.length ? Math.min(...bVals) : 0;
+      const maxB = bVals.length ? Math.max(...bVals) : 0;
+      const xy = (b) => {
+        const val = b[anBodyMetric];
+        const x = (ds.indexOf(b.date) + 0.5) * u;
+        const y = maxB === minB ? H / 2 : H - 18 - ((val - minB) / (maxB - minB)) * (H - 36);
+        return [x, y];
+      };
+      const lineSvg = (bodySeries.length > 1
+        ? `<polyline points="${bodySeries.map(b => xy(b).map(v => v.toFixed(1)).join(',')).join(' ')}" fill="none" stroke="currentColor" class="${bm.stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`
+        : '') + bodySeries.map(b => {
+          const [cx, cy] = xy(b);
+          const val = b[anBodyMetric];
+          return `
+            <g data-a="tipw" data-v="${b.date}|${val}|${bm.unit}" class="cursor-pointer">
+              <circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="12" fill="transparent"/>
+              <circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4.5" class="${bm.fill} stroke-white dark:stroke-zinc-900" stroke-width="2">
+                <title>${b.date}: ${val} ${bm.unit}</title>
+              </circle>
+            </g>`;
+        }).join('');
+
+      const rangeCaption = `${fmt(start, { day: 'numeric', month: 'short' })} – ${ok ? fmt(end, { day: 'numeric', month: 'short' }) : L('วันนี้', 'Today')}`;
+
+      return `
+        <div class="space-y-5 animate-fade">
+          <h1 class="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">${L('วิเคราะห์', 'Analytics')}</h1>
+
+          <!-- เลือกช่วงเวลา -->
+          <div class="flex flex-wrap items-center gap-2">
+            ${[7, 30, 90].map(d => `
+              <button data-a="rg" data-v="${d}" class="${d === rg && !ok ? CLS.btnPrimary : CLS.btn} !py-1.5 !min-h-[38px]">
+                ${d} ${L('วัน', 'days')}
+              </button>`).join('')}
+            <div class="flex flex-wrap items-center gap-2 sm:ml-auto">
+              <label class="flex items-center gap-1.5 text-xs text-zinc-500">
+                <span>${L('จาก', 'From')}</span>
+                <input type="date" data-c="cua" value="${cu && cu.a ? cu.a : ''}" class="${CLS.input} !py-1.5 !min-h-[38px]">
+              </label>
+              <label class="flex items-center gap-1.5 text-xs text-zinc-500">
+                <span>${L('ถึง', 'To')}</span>
+                <input type="date" data-c="cub" value="${cu && cu.b ? cu.b : ''}" class="${CLS.input} !py-1.5 !min-h-[38px]">
+              </label>
+              ${hasCustom ? `<button data-a="clrcu" class="${CLS.btn} !py-1.5 !px-3 !min-h-[38px] text-xs">${L('ล้างช่วงวันที่', 'Clear')}</button>` : ''}
+            </div>
+          </div>
+
+          ${badCustom ? `
+            <div class="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/60 text-xs font-medium text-rose-700 dark:text-rose-300">
+              ${L('วันที่เริ่มต้นต้องไม่มากกว่าวันที่สิ้นสุด (กำลังแสดงข้อมูลช่วงมาตรฐานแทน)', 'Start date must not be after end date (showing preset range instead).')}
+            </div>` : ''}
+
+          <!-- การ์ดสรุป 3 ช่อง -->
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="${CLS.card}">
+              <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-2">${L('แคลอรี่ & มาโครเฉลี่ย', 'Avg calories & macros')}</h2>
+              ${avgK != null ? `
+                <div class="text-3xl font-extrabold tabular-nums text-zinc-900 dark:text-white">${avgK.toLocaleString()} <span class="text-sm font-normal text-zinc-500">kcal/${L('วัน', 'd')}</span></div>
+                <div class="flex flex-wrap gap-2 mt-2 text-xs font-semibold tabular-nums">
+                  <span class="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">P ${avgP}${L('ก.', 'g')}</span>
+                  <span class="px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300">C ${avgC}${L('ก.', 'g')}</span>
+                  <span class="px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300">F ${avgF}${L('ก.', 'g')}</span>
+                </div>
+                <p class="text-xs text-zinc-500 mt-2">${L(`จาก ${completeDays.length} วันที่บันทึกครบ (วันไม่ได้บันทึกไม่นับเป็นศูนย์)`, `From ${completeDays.length} complete days (unlogged days excluded)`)}</p>
+              ` : `<p class="text-sm text-zinc-500">${L('ยังไม่มีบันทึกอาหารในช่วงนี้', 'No food logs in this period')}</p>`}
+            </div>
+
+            <div class="${CLS.card}">
+              <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-2">${L('เวิร์กเอาต์', 'Workout')}</h2>
+              <div class="text-3xl font-extrabold tabular-nums text-zinc-900 dark:text-white">${wk.length} <span class="text-sm font-normal text-zinc-500">${L('ครั้ง', 'sessions')}</span></div>
+              <p class="text-xs text-zinc-500 mt-1.5 tabular-nums">${L('วอลุ่มรวม', 'Total volume')} ${wk.reduce((a, w) => a + calcVol(w), 0).toLocaleString()} ${L('กก.', 'kg')}${wkTotalMin > 0 ? ` · ${wkTotalMin} ${L('นาที', 'min')}` : ''}</p>
+            </div>
+
+            <div class="${CLS.card}">
+              <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-2">${L('คาร์ดิโอ', 'Cardio')}</h2>
+              <div class="text-3xl font-extrabold tabular-nums text-zinc-900 dark:text-white">${r1(cd.reduce((a, c) => a + c.km, 0))} <span class="text-sm font-normal text-zinc-500">${L('กม.', 'km')}</span></div>
+              <p class="text-xs text-zinc-500 mt-1.5 tabular-nums">${cd.reduce((a, c) => a + c.min, 0)} ${L('นาที', 'min')} · ${cd.length} ${L('ครั้ง', 'sessions')}</p>
+            </div>
+          </div>
+
+          <!-- กราฟแคลอรี่รายวัน -->
+          <div class="${CLS.card} space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <h2 class="text-base font-bold text-zinc-900 dark:text-white">${L('แคลอรี่รายวัน (kcal)', 'Daily calories (kcal)')}</h2>
+              <span id="chart-tip-k" class="text-xs font-medium text-blue-600 dark:text-blue-400 tabular-nums">${rangeCaption}</span>
+            </div>
+            ${ds.some(hasNut) ? `
+              <div class="w-full overflow-hidden">
+                <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${L('กราฟแคลอรี่รายวัน', 'Daily calories chart')}" class="w-full h-auto overflow-visible">${barsSvg}</svg>
+              </div>
+              <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm bg-blue-500 dark:bg-blue-400"></span>${L('บันทึกครบ', 'Complete')}</span>
+                <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm bg-blue-300 dark:bg-blue-800"></span>${L('บันทึกบางส่วน', 'Partial')}</span>
+                <span class="inline-flex items-center gap-1.5"><span class="w-4 border-t-2 border-dashed border-zinc-400"></span>${L('เป้าหมาย', 'Goal')} (${set.kcal} kcal)</span>
+                <span>· ${L('แตะแท่งกราฟเพื่อดูตัวเลข', 'Tap a bar for details')}</span>
+              </div>
+            ` : `<p class="text-sm text-zinc-500 py-8 text-center">${L('ยังไม่มีข้อมูล', 'No data yet')}</p>`}
+          </div>
+
+          <!-- กราฟสัดส่วนร่างกายแบบสลับได้ -->
+          <div class="${CLS.card} space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex flex-wrap items-center gap-1.5">
+                ${Object.entries(BODY_METRICS).map(([key, m]) => `
+                  <button data-a="anbm" data-v="${key}" class="px-3 py-1 rounded-full text-xs font-semibold border transition cursor-pointer
+                    ${anBodyMetric === key
+                      ? 'bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 border-zinc-900 dark:border-white'
+                      : 'bg-zinc-50 dark:bg-zinc-950/70 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800 hover:border-zinc-400'}">
+                    ${L(m.th, m.en)}
+                  </button>`).join('')}
+              </div>
+              <span id="chart-tip-w" class="text-xs font-medium ${bm.tip} tabular-nums">${rangeCaption}</span>
+            </div>
+            ${bodySeries.length ? `
+              <div class="w-full overflow-hidden">
+                <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${L(bm.th, bm.en)}" class="w-full h-auto overflow-visible">${lineSvg}</svg>
+              </div>
+              <div class="flex flex-wrap gap-4 text-xs text-zinc-500 dark:text-zinc-400 tabular-nums">
+                <span>${L('แตะจุดเพื่อดูวันที่', 'Tap a dot for date')}</span>
+                <span>${L('ต่ำสุด', 'Min')}: <b class="text-zinc-900 dark:text-zinc-100">${minB}</b> ${bm.unit}</span>
+                <span>${L('สูงสุด', 'Max')}: <b class="text-zinc-900 dark:text-zinc-100">${maxB}</b> ${bm.unit}</span>
+                <span>${L('ล่าสุด', 'Latest')}: <b class="text-zinc-900 dark:text-zinc-100">${bVals[bVals.length - 1]}</b> ${bm.unit}</span>
+              </div>
+            ` : `<p class="text-sm text-zinc-500 py-8 text-center">${L('ยังไม่มีข้อมูลในช่วงนี้', 'No data in this period')}</p>`}
+          </div>
+        </div>`;
+    };
+
+    /* --- 10.7 หน้าโปรไฟล์ (Profile) --- */
+    P.pf = () => {
+      const p = set.pf || {};
+      const w = latestWeight();
+      const bmi = w && p.h ? r1(w.weight / Math.pow(p.h / 100, 2)) : null;
+      const estK = estimateKcal();
+      const estM = estK ? estimateMacros(estK) : null;
+
+      return `
+        <div class="space-y-5 animate-fade">
+          <h1 class="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">${L('โปรไฟล์', 'Profile')}</h1>
+
+          <div class="${CLS.card} space-y-4">
+            <div>
+              <h2 class="text-base font-bold text-zinc-900 dark:text-white">${L('ข้อมูลส่วนตัว', 'Personal info')}</h2>
+              <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">${L('เก็บไว้ในเครื่องนี้เท่านั้น ไม่ต้องกรอกทุกช่อง (หากกรอกปีเกิด พ.ศ. ระบบจะแปลงเป็น ค.ศ. ให้)', 'Stored on this device only. All fields are optional.')}</p>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <label class="block">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ชื่อเล่น', 'Nickname')}</span>
+                <input id="pn" value="${esc(p.name || '')}" class="${CLS.input} !w-full">
+              </label>
+              <label class="block">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ปีเกิด (ค.ศ.)', 'Birth year (CE)')}</span>
+                <input id="pby" type="number" value="${p.by ?? ''}" placeholder="1998" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('เพศ', 'Sex')}</span>
+                <select id="psx" class="${CLS.input} !w-full">
+                  <option value="">${L('ไม่ระบุ', 'Prefer not to say')}</option>
+                  <option value="m" ${p.sx === 'm' ? 'selected' : ''}>${L('ชาย', 'Male')}</option>
+                  <option value="f" ${p.sx === 'f' ? 'selected' : ''}>${L('หญิง', 'Female')}</option>
+                </select>
+              </label>
+              <label class="block">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ส่วนสูง (ซม.)', 'Height (cm)')}</span>
+                <input id="ph" type="number" step="any" min="0" value="${p.h ?? ''}" placeholder="170" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('น้ำหนักเป้าหมาย (กก.)', 'Goal weight (kg)')}</span>
+                <input id="pgw" type="number" step="any" min="0" value="${p.gw ?? ''}" placeholder="65" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('เป้าหมาย', 'Goal')}</span>
+                <select id="pgl" class="${CLS.input} !w-full">
+                  ${GOALS.map(g => `<option value="${g[0]}" ${(p.gl || 'keep') === g[0] ? 'selected' : ''}>${L(g[1], g[2])}</option>`).join('')}
+                </select>
+              </label>
+              <label class="block sm:col-span-2 lg:col-span-3">
+                <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ระดับกิจกรรม', 'Activity level')}</span>
+                <select id="pac" class="${CLS.input} !w-full">
+                  ${ACTIVITIES.map(a => `<option value="${a[0]}" ${(p.ac || '1.2') === a[0] ? 'selected' : ''}>${L(a[1], a[2])}</option>`).join('')}
+                </select>
+              </label>
+            </div>
+            <div>
+              <button data-a="savepf" class="${CLS.btnPrimary}">${L('บันทึกโปรไฟล์', 'Save profile')}</button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="${CLS.card}">
+              <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-2">BMI</h2>
+              ${bmi ? `
+                <div class="text-3xl font-extrabold tabular-nums text-zinc-900 dark:text-white">${bmi}</div>
+                <p class="text-xs text-zinc-500 mt-1.5">
+                  ${L(`จากน้ำหนักล่าสุด ${w.weight} กก. และส่วนสูง ${p.h} ซม. (เป็นเพียงตัวชี้วัดคร่าวๆ)`, `From latest weight ${w.weight} kg and height ${p.h} cm (a rough indicator only)`)}
+                </p>
+              ` : `<p class="text-sm text-zinc-500">${L('ใส่ส่วนสูงและบันทึกน้ำหนักก่อน', 'Enter your height and log a weight first')}</p>`}
+            </div>
+
+            <div class="${CLS.card} space-y-3">
+              <div>
+                <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-2">${L('แคลอรี่และมาโครที่แนะนำ', 'Suggested calories & macros')}</h2>
+                ${estK ? `
+                  <div class="text-3xl font-extrabold tabular-nums text-zinc-900 dark:text-white">${estK.toLocaleString()} <span class="text-sm font-normal text-zinc-500">kcal/${L('วัน', 'day')}</span></div>
+                  <div class="flex flex-wrap gap-2 mt-2 text-xs font-semibold tabular-nums">
+                    <span class="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">${L('โปรตีน', 'P')} ${estM.p} ${L('ก.', 'g')}</span>
+                    <span class="px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300">${L('คาร์บ', 'C')} ${estM.c} ${L('ก.', 'g')}</span>
+                    <span class="px-2.5 py-1 rounded-lg bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300">${L('ไขมัน', 'F')} ${estM.f} ${L('ก.', 'g')}</span>
+                  </div>
+                  <p class="text-xs text-zinc-500 mt-2">${L('ประมาณจากสูตร Mifflin-St Jeor ไม่ใช่คำแนะนำทางการแพทย์', 'Estimated with the Mifflin-St Jeor formula; not medical advice')}</p>
+                ` : `<p class="text-sm text-zinc-500">${L('ต้องมีปีเกิด เพศ ส่วนสูง และน้ำหนักล่าสุด', 'Needs birth year, sex, height and latest weight')}</p>`}
+              </div>
+              ${estK ? `
+                <div class="flex flex-wrap gap-2">
+                  <button data-a="useall" class="${CLS.btnPrimary} text-xs">${L('ใช้แคลอรี่ + มาโคร', 'Apply calories + macros')}</button>
+                  <button data-a="usekcal" class="${CLS.btn} text-xs">${L('ใช้เฉพาะแคลอรี่', 'Calories only')}</button>
+                </div>` : ''}
+            </div>
+          </div>
+        </div>`;
+    };
+
+    /* --- 10.8 หน้าตั้งค่าและสำรองข้อมูล (Settings & Backup) --- */
+    P.set = () => `
+      <div class="space-y-5 animate-fade">
+        <h1 class="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">${L('ตั้งค่าและสำรองข้อมูล', 'Settings & Backup')}</h1>
+
+        <div class="${CLS.card} space-y-4">
+          <h2 class="text-base font-bold text-zinc-900 dark:text-white">${L('เป้าหมายรายวัน & การแสดงผล', 'Daily goals & preferences')}</h2>
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <label class="block">
+              <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">kcal</span>
+              <input id="sk" type="number" min="0" value="${set.kcal}" class="${CLS.input} !w-full tabular-nums">
+            </label>
+            <label class="block">
+              <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('โปรตีน (ก.)', 'Protein (g)')}</span>
+              <input id="sp" type="number" min="0" value="${set.p}" class="${CLS.input} !w-full tabular-nums">
+            </label>
+            <label class="block">
+              <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('คาร์บ (ก.)', 'Carbs (g)')}</span>
+              <input id="sc" type="number" min="0" value="${set.c}" class="${CLS.input} !w-full tabular-nums">
+            </label>
+            <label class="block">
+              <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ไขมัน (ก.)', 'Fat (g)')}</span>
+              <input id="sf" type="number" min="0" value="${set.f}" class="${CLS.input} !w-full tabular-nums">
+            </label>
+            <label class="block col-span-2 sm:col-span-1">
+              <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('น้ำดื่ม (มล.)', 'Water (ml)')}</span>
+              <input id="swat" type="number" min="250" step="50" value="${set.water || 2000}" class="${CLS.input} !w-full tabular-nums">
+            </label>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+            <label class="block">
+              <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('ธีม', 'Theme')}</span>
+              <select id="sth" class="${CLS.input} !w-full">
+                <option value="sys" ${set.th === 'sys' ? 'selected' : ''}>${L('ตามระบบ', 'System')}</option>
+                <option value="light" ${set.th === 'light' ? 'selected' : ''}>${L('สว่าง', 'Light')}</option>
+                <option value="dark" ${set.th === 'dark' ? 'selected' : ''}>${L('มืด', 'Dark')}</option>
+              </select>
+            </label>
+            <label class="block">
+              <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400 block mb-1">${L('เริ่มสัปดาห์', 'Week starts')}</span>
+              <select id="sws" class="${CLS.input} !w-full">
+                <option value="1" ${set.ws == 1 ? 'selected' : ''}>${L('จันทร์', 'Monday')}</option>
+                <option value="0" ${set.ws == 0 ? 'selected' : ''}>${L('อาทิตย์', 'Sunday')}</option>
+              </select>
+            </label>
+            <button data-a="saveset" class="${CLS.btnPrimary} w-full">${L('บันทึกการตั้งค่า', 'Save settings')}</button>
+          </div>
+        </div>
+
+        <div class="${CLS.card} space-y-4">
+          <div>
+            <h2 class="text-base font-bold text-zinc-900 dark:text-white">${L('สำรองและกู้คืน', 'Backup & restore')}</h2>
+            <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
+              ${L('ข้อมูลอยู่ในเบราว์เซอร์เครื่องนี้เท่านั้น การล้างข้อมูลเว็บไซต์จะทำให้ข้อมูลหาย ควรสร้างไฟล์สำรองเป็นประจำ', 'Data lives only in this browser; clearing site data erases it. Back up regularly.')}
+              ${set.bk
+                ? `${L('ไฟล์สำรองล่าสุดสร้างเมื่อ', 'Last backup file created')} ${new Date(set.bk).toLocaleString(set.lang === 'en' ? 'en-GB' : 'th-TH')}`
+                : L('ยังไม่เคยสร้างไฟล์สำรอง', 'No backup file yet')}
+              ${L('(เวลาที่สร้างไฟล์ ไม่ใช่การยืนยันว่าเก็บไฟล์ไว้แล้ว)', '(time generated, not proof you saved it)')}
+            </p>
+          </div>
+
+          <div class="flex flex-wrap gap-2">
+            <button data-a="exp" class="${CLS.btnPrimary}">${L('ดาวน์โหลดไฟล์สำรอง (JSON)', 'Download backup (JSON)')}</button>
+            <button data-a="csv" class="${CLS.btn}">${L('ส่งออก CSV', 'Export CSV')}</button>
+            <label class="${CLS.btn}">
+              <span>${L('กู้คืนจากไฟล์ (แทนที่ข้อมูลทั้งหมด)', 'Restore from file (replaces all data)')}</span>
+              <input type="file" accept=".json" data-c="imp" hidden>
+            </label>
+          </div>
+
+          ${bkTxt ? `
+            <div class="space-y-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+              <textarea id="bkt" readonly rows="5" class="${CLS.input} !w-full font-mono text-xs">${esc(bkTxt)}</textarea>
+              <button data-a="cp" class="${CLS.btn} text-xs">${ICONS.copy}<span>${L('คัดลอกข้อความ', 'Copy text')}</span></button>
+            </div>` : ''}
+        </div>
+      </div>`;
+
+    /* ============================================================================
+     * 11. MODALS (หน้าต่างยืนยันและหน้าต่างแก้ไขรายการ)
+     * ============================================================================ */
+    const renderModals = () => {
+      const root = $('#modal-root');
+      if (!root) return;
+
+      if (pend) {
+        root.innerHTML = `
+          <div data-a="modalbg" class="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 animate-fade" role="alertdialog" aria-modal="true">
+            <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 max-w-md w-full shadow-2xl space-y-4">
+              <p class="font-bold text-zinc-900 dark:text-white leading-relaxed">${esc(pend.t)}</p>
+              <div class="flex justify-end gap-2">
+                <button data-a="no" class="${CLS.btn}">${L('ยกเลิก', 'Cancel')}</button>
+                <button data-a="yes" class="${CLS.btnPrimary}">${L('ยืนยัน', 'Confirm')}</button>
+              </div>
+            </div>
+          </div>`;
+        return;
+      }
+
+      if (ed) {
+        const { s, id, iid } = ed;
+        let recDate = D;
+        let fieldsHtml = '';
+        let showDate = true;
+
+        if (s === 'meals') {
+          const m = S.meals.find(x => x.id === id);
+          const item = m && m.items.find(x => x.id === iid);
+          if (!item) { ed = null; root.innerHTML = ''; return; }
+          recDate = m.date;
+          const isStdMeal = MEAL_TYPES.some(mt => mt.th === m.type);
+          fieldsHtml = `
+            <div class="font-semibold text-zinc-900 dark:text-white">${esc(storedFoodName(item.n))}</div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <label class="block">
+                <span class="text-xs text-zinc-500 block mb-1">${L('จำนวน', 'Quantity')} (${esc(storedFoodUnit(item.u))})</span>
+                <input id="e1" type="number" step="any" min="0" value="${item.q}" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block">
+                <span class="text-xs text-zinc-500 block mb-1">${L('มื้ออาหาร', 'Meal')}</span>
+                <select id="emtype" class="${CLS.input} !w-full">
+                  ${MEAL_TYPES.map(mt => `<option value="${mt.th}" ${mt.th === m.type ? 'selected' : ''}>${L(mt.th, mt.en)}</option>`).join('')}
+                </select>
+              </label>
+            </div>
+            <label class="block">
+              <span class="text-xs text-zinc-500 block mb-1">${L('หรือระบุชื่อมื้อเอง (ไม่บังคับ)', 'Or custom meal name (optional)')}</span>
+              <input id="emtypec" value="${esc(isStdMeal ? '' : m.type)}" placeholder="${L('เว้นว่างเพื่อใช้มื้อด้านบน', 'Leave blank to use meal above')}" class="${CLS.input} !w-full">
+            </label>`;
+        } else if (s === 'foods') {
+          const f = S.foods.find(x => x.id === id);
+          if (!f) { ed = null; root.innerHTML = ''; return; }
+          showDate = false;
+          fieldsHtml = `
+            <div class="grid grid-cols-2 gap-2.5">
+              <label class="block col-span-2">
+                <span class="text-xs text-zinc-500 block mb-1">${L('ชื่ออาหาร', 'Food name')}</span>
+                <input id="e1" value="${esc(f.n)}" class="${CLS.input} !w-full">
+              </label>
+              <label class="block">
+                <span class="text-xs text-zinc-500 block mb-1">${L('หมวดหมู่', 'Category')}</span>
+                <select id="efcat" class="${CLS.input} !w-full">
+                  ${FOOD_CATS.filter(c => c.id !== 'all').map(c => `<option value="${c.id}" ${(f.cat || 'other') === c.id ? 'selected' : ''}>${L(c.th, c.en)}</option>`).join('')}
+                </select>
+              </label>
+              <label class="block">
+                <span class="text-xs text-zinc-500 block mb-1">${L('หน่วย', 'Unit')}</span>
+                <input id="e2" value="${esc(f.u)}" class="${CLS.input} !w-full">
+              </label>
+              <label class="block">
+                <span class="text-xs text-zinc-500 block mb-1">kcal</span>
+                <input id="e3" type="number" step="any" min="0" value="${f.k}" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block">
+                <span class="text-xs text-zinc-500 block mb-1">${L('โปรตีน (ก.)', 'Protein (g)')}</span>
+                <input id="e4" type="number" step="any" min="0" value="${f.p}" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block">
+                <span class="text-xs text-zinc-500 block mb-1">${L('คาร์บ (ก.)', 'Carbs (g)')}</span>
+                <input id="e5" type="number" step="any" min="0" value="${f.c}" class="${CLS.input} !w-full tabular-nums">
+              </label>
+              <label class="block">
+                <span class="text-xs text-zinc-500 block mb-1">${L('ไขมัน (ก.)', 'Fat (g)')}</span>
+                <input id="e6" type="number" step="any" min="0" value="${f.f}" class="${CLS.input} !w-full tabular-nums">
+              </label>
+            </div>`;
+        } else {
+          const r = S[s].find(x => x.id === id);
+          if (!r) { ed = null; root.innerHTML = ''; return; }
+          recDate = r.date;
+          if (s === 'workouts') {
+            const textVal = r.exercises.map(e =>
+              `${e.name}: ${e.sets.map(st => `${st.reps}x${st.w ?? ''}${st.rpe != null ? `@${st.rpe}` : ''}${st.done === false ? ' ไม่เสร็จ' : ''}`).join(', ')}`
+            ).join('\n');
+            fieldsHtml = `
+              <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                <label class="block sm:col-span-8">
+                  <span class="text-xs text-zinc-500 block mb-1">${L('ชื่อเซสชัน', 'Session name')}</span>
+                  <input id="e1" value="${esc(r.name)}" class="${CLS.input} !w-full">
+                </label>
+                <label class="block sm:col-span-4">
+                  <span class="text-xs text-zinc-500 block mb-1">${L('เวลา (นาที)', 'Duration (min)')}</span>
+                  <input id="edur" type="number" step="any" min="0" value="${r.min ?? ''}" placeholder="-" class="${CLS.input} !w-full tabular-nums">
+                </label>
+              </div>
+              <textarea id="e2" rows="5" class="${CLS.input} !w-full font-mono text-xs">${esc(textVal)}</textarea>
+              <p class="text-xs text-zinc-500">${L('บรรทัดละท่า เช่น Bench Press: 10x60, 8x62.5 (ครั้งxกก.@RPE เติม ไม่เสร็จ ท้ายเซ็ตที่ยังไม่เสร็จ)', 'One exercise per line, e.g. Bench Press: 10x60, 8x62.5 (repsxkg@RPE)')}</p>`;
+          } else if (s === 'cardio') {
+            fieldsHtml = `
+              <div class="grid grid-cols-2 gap-2.5">
+                <label class="block col-span-2">
+                  <span class="text-xs text-zinc-500 block mb-1">${L('ประเภท', 'Type')}</span>
+                  <select id="e0" class="${CLS.input} !w-full">
+                    ${CARDIO_TYPES.map(c => `<option value="${c.th}" ${c.th === r.type ? 'selected' : ''}>${L(c.th, c.en)}</option>`).join('')}
+                  </select>
+                </label>
+                <label class="block">
+                  <span class="text-xs text-zinc-500 block mb-1">${L('กม.', 'km')}</span>
+                  <input id="e1" type="number" step="any" min="0" value="${r.km}" class="${CLS.input} !w-full tabular-nums">
+                </label>
+                <label class="block">
+                  <span class="text-xs text-zinc-500 block mb-1">${L('นาที', 'min')}</span>
+                  <input id="e2" type="number" step="any" min="0" value="${r.min}" class="${CLS.input} !w-full tabular-nums">
+                </label>
+                <label class="block col-span-2">
+                  <span class="text-xs text-zinc-500 block mb-1">HR (${L('ไม่บังคับ', 'optional')})</span>
+                  <input id="e3" type="number" min="0" value="${r.hr ?? ''}" placeholder="-" class="${CLS.input} !w-full tabular-nums">
+                </label>
+              </div>`;
+          } else {
+            fieldsHtml = `
+              <div class="grid grid-cols-3 gap-2.5">
+                <label class="block">
+                  <span class="text-xs text-zinc-500 block mb-1">${L('น้ำหนัก กก.', 'Weight kg')}</span>
+                  <input id="e1" type="number" step="any" min="0" value="${r.weight ?? ''}" class="${CLS.input} !w-full tabular-nums">
+                </label>
+                <label class="block">
+                  <span class="text-xs text-zinc-500 block mb-1">${L('ไขมัน %', 'Fat %')}</span>
+                  <input id="e2" type="number" step="any" min="0" max="100" value="${r.fat ?? ''}" class="${CLS.input} !w-full tabular-nums">
+                </label>
+                <label class="block">
+                  <span class="text-xs text-zinc-500 block mb-1">${L('เอว ซม.', 'Waist cm')}</span>
+                  <input id="e3" type="number" step="any" min="0" value="${r.waist ?? ''}" class="${CLS.input} !w-full tabular-nums">
+                </label>
+              </div>`;
+          }
+        }
+
+        root.innerHTML = `
+          <div data-a="modalbg" class="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 animate-fade" role="dialog" aria-modal="true">
+            <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 max-w-lg w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+              <div class="flex items-center justify-between">
+                <h3 class="text-base font-bold text-zinc-900 dark:text-white">${L('แก้ไขรายการ', 'Edit item')}</h3>
+                <button data-a="edno" aria-label="${L('ปิด', 'Close')}" class="${CLS.btnIcon}">${ICONS.close}</button>
+              </div>
+              <div class="space-y-3">
+                ${showDate ? `
+                  <label class="block">
+                    <span class="text-xs text-zinc-500 block mb-1">${L('วันที่', 'Date')}</span>
+                    <input id="edd" type="date" value="${recDate}" class="${CLS.input} !w-full">
+                  </label>` : ''}
+                ${fieldsHtml}
+              </div>
+              <div class="flex justify-end gap-2 pt-2">
+                <button data-a="edno" class="${CLS.btn}">${L('ยกเลิก', 'Cancel')}</button>
+                <button data-a="edsave" class="${CLS.btnPrimary}">${L('บันทึกการแก้ไข', 'Save changes')}</button>
+              </div>
+            </div>
+          </div>`;
+        return;
+      }
+
+      root.innerHTML = '';
+    };
+
+    /* ============================================================================
+     * 12. CORE RENDER & SAFE TRANSACTION WRAPPER
+     * ============================================================================ */
+    const render = () => {
+      saveDraft();
+      renderNav();
+      $('#app').innerHTML = P[page]();
+      renderModals();
+    };
+
+    const safeRun = async (fn, successMsg) => {
+      if (busy) return;
+      busy = true;
+      try {
+        await fn();
+        await dbLoadAll();
+        if (successMsg) showToast(successMsg, 'ok');
+      } catch (err) {
+        showToast(L('บันทึกไม่สำเร็จ (พื้นที่เก็บข้อมูลอาจเต็ม หรือเบราว์เซอร์บล็อก)', 'Could not save (storage may be full or blocked)'), 'error');
+      } finally {
+        busy = false;
+        render();
+      }
+    };
+
+    /* ============================================================================
+     * 13. ACTIONS HANDLER (คำสั่งจากการกดปุ่มทั้งหมด)
+     * ============================================================================ */
+    const A = {
+      nav: (v) => { page = v; ed = null; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); },
+      qa: (v) => {
+        const [targetPage, sub] = v.split(':');
+        if (page === 'dash') {
+          const T = todayStr();
+          D = T; cm = T.slice(0, 7);
+        }
+        page = targetPage;
+        ed = null;
+        render();
+        if (sub === 'cardio') {
+          setTimeout(() => {
+            const card = $('#cardio-card');
+            if (card) {
+              card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              card.classList.add('highlight-pulse');
+              setTimeout(() => card.classList.remove('highlight-pulse'), 1800);
+            }
+          }, 60);
+        } else {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      },
+
+      sd: (v) => { D = v; render(); },
+      stepd: (v) => { D = addDays(D, +v); cm = D.slice(0, 7); render(); },
+      today: () => { const T = todayStr(); D = T; cm = T.slice(0, 7); render(); },
+      mm: (v) => {
+        const d = parseDate(`${cm}-01`);
+        d.setMonth(d.getMonth() + +v);
+        cm = ymd(d).slice(0, 7);
+        render();
+      },
+
+      yes: () => { const p = pend; pend = null; p ? p.f() : render(); },
+      no: () => { pend = null; renderModals(); },
+      edno: () => { ed = null; renderModals(); },
+      modalbg: (_v, e) => {
+        if (e.target === e.currentTarget) { pend = null; ed = null; renderModals(); }
+      },
+
+      // น้ำดื่ม
+      water: (v) => {
+        const [dateKey, delta] = v.split('|');
+        const cur = waterOf(dateKey);
+        const next = delta === 'reset' ? 0 : Math.max(0, cur + Number(delta));
+        safeRun(() => dbPut('days', { ...dayRec(dateKey), water: next }));
+      },
+
+      // ค้นหาและเลือกอาหาร
+      fcat: (v) => { fcat = v; render(); },
+      clrfs: () => { fs = ''; render(); $('#fsr')?.focus(); },
+      pick: (v) => {
+        fsel = allFoods()[+v] || null;
+        const pickEl = $('#pick');
+        const resEl = $('#res');
+        if (pickEl) pickEl.innerHTML = renderFoodPicker();
+        if (resEl) resEl.innerHTML = renderFoodResults();
+      },
+      setfq: (v) => {
+        const inp = $('#fq');
+        if (inp) { inp.value = v; updateFoodPreview(); }
+      },
+      fav: () => {
+        if (!fsel) return;
+        const favs = set.fav || (set.fav = []);
+        const idx = favs.indexOf(fsel.n);
+        idx < 0 ? favs.push(fsel.n) : favs.splice(idx, 1);
+        saveSet();
+        if ($('#pick')) $('#pick').innerHTML = renderFoodPicker();
+        if ($('#res')) $('#res').innerHTML = renderFoodResults();
+      },
+
+      addfood: () => {
+        const q = +($('#fq')?.value || 0);
+        if (!(q > 0)) return showToast(L('ใส่จำนวนมากกว่า 0', 'Enter a number above 0'), 'error');
+        const selMeal = $('#ft')?.value;
+        if (selMeal) lastMealType = selMeal;
+        const type = ($('#ftc')?.value || '').trim() || lastMealType || 'มื้อเช้า';
+        safeRun(async () => {
+          const m = S.meals.find(x => x.date === D && x.type === type) || { id: uid(), date: D, type, items: [] };
+          const mul = isGramFood(fsel) ? q / 100 : q;
+          m.items.push({
+            id: uid(),
+            n: fsel.n,
+            u: isGramFood(fsel) ? 'ก.' : fsel.u,
+            q,
+            k: fsel.k * mul,
+            p: fsel.p * mul,
+            c: fsel.c * mul,
+            f: fsel.f * mul
+          });
+          await dbPut('meals', m);
+        }, L('เพิ่มอาหารแล้ว', 'Added'));
+      },
+
+      quickadd: () => {
+        const k = nz($('#qk')?.value);
+        const p = +($('#qp')?.value || 0);
+        const c = +($('#qc')?.value || 0);
+        const f = +($('#qf')?.value || 0);
+        if (!(k > 0)) return showToast(L('กรุณาใส่แคลอรี่มากกว่า 0', 'Enter calories above 0'), 'error');
+        if (p < 0 || c < 0 || f < 0) return showToast(L('ค่าสารอาหารต้องไม่ติดลบ', 'Macros cannot be negative'), 'error');
+        const selMeal = $('#qft')?.value;
+        if (selMeal) lastMealType = selMeal;
+        const type = lastMealType || 'ของว่าง';
+        const label = ($('#qn')?.value || '').trim() || L('เพิ่มแคลอรี่ด่วน', 'Quick add');
+        safeRun(async () => {
+          const m = S.meals.find(x => x.date === D && x.type === type) || { id: uid(), date: D, type, items: [] };
+          m.items.push({ id: uid(), n: label, u: L('ครั้ง', 'serving'), q: 1, k, p, c, f });
+          await dbPut('meals', m);
+        }, L('เพิ่มแคลอรี่ด่วนแล้ว', 'Quick calories added'));
+      },
+
+      copymeals: () => {
+        const srcDate = $('#copy-meal-date')?.value;
+        if (!srcDate) return;
+        const srcMeals = onDate('meals', srcDate);
+        if (!srcMeals.length) return;
+        safeRun(async () => {
+          for (const sm of srcMeals) {
+            const target = S.meals.find(x => x.date === D && x.type === sm.type) || { id: uid(), date: D, type: sm.type, items: [] };
+            sm.items.forEach(item => target.items.push({ ...item, id: uid() }));
+            await dbPut('meals', target);
+          }
+        }, L('คัดลอกมื้ออาหารมาวันที่เลือกแล้ว', 'Meals copied to selected date'));
+      },
+
+      newfood: () => {
+        const n = ($('#cn')?.value || '').trim();
+        const k = nz($('#ck')?.value);
+        const p = +($('#cp')?.value || 0);
+        const c = +($('#cc')?.value || 0);
+        const f = +($('#cf')?.value || 0);
+        if (!n || k == null || k < 0) return showToast(L('ใส่ชื่อและแคลอรี่ (ต้องไม่ติดลบ)', 'Enter a name and non-negative calories'), 'error');
+        if (p < 0 || c < 0 || f < 0) return showToast(L('ค่าสารอาหารต้องไม่ติดลบ', 'Macros cannot be negative'), 'error');
+        const cat = $('#ccat')?.value || 'other';
+        const u = ($('#cu')?.value || '').trim() || L('หน่วย', 'unit');
+        safeRun(() => dbPut('foods', { id: uid(), n, cat, u, k, p, c, f }), L('บันทึกอาหารส่วนตัวแล้ว', 'Food saved'));
+      },
+
+      // เวิร์กเอาต์และคาร์ดิโอ
+      addset: () => {
+        const name = ($('#en')?.value || '').trim();
+        const reps = +($('#er')?.value || 0);
+        const w = nz($('#ew')?.value);
+        const rpe = nz($('#erpe')?.value);
+        const done = !!$('#edone')?.checked;
+        if (!name || !(reps > 0)) return showToast(L('ใส่ชื่อท่าและจำนวนครั้งมากกว่า 0', 'Enter an exercise and reps > 0'), 'error');
+        if (w != null && w < 0) return showToast(L('น้ำหนักต้องไม่ติดลบ', 'Weight cannot be negative'), 'error');
+        if (rpe != null && (rpe < 1 || rpe > 10)) return showToast(L('RPE ต้องอยู่ระหว่าง 1–10', 'RPE must be 1–10'), 'error');
+
+        let ex = draft.find(x => x.name === name);
+        if (!ex) { ex = { name, sets: [] }; draft.push(ex); }
+        ex.sets.push({ reps, w, rpe, done });
+        lastEx = { name, reps: String(reps), w: w != null ? String(w) : '', rpe: rpe != null ? String(rpe) : '', done };
+        render();
+      },
+
+      loadw: () => {
+        const wid = $('#copy-wo-src')?.value;
+        const src = S.workouts.find(w => w.id === wid);
+        if (!src) return;
+        const applyRoutine = () => {
+          draft = JSON.parse(JSON.stringify(src.exercises));
+          draft.name = src.name;
+          draft.min = src.min != null ? String(src.min) : '';
+          showToast(L('โหลดรูทีนลงร่างแล้ว ปรับแก้ก่อนบันทึกได้', 'Routine loaded into draft'), 'info');
+          render();
+        };
+        if (draft.length > 0) {
+          pend = {
+            t: L(`คุณมีเซ็ตค้างอยู่ในร่างอยู่แล้ว ต้องการแทนที่ด้วยรูทีน "${src.name}" หรือไม่?`, `You already have sets in your draft. Replace with "${src.name}"?`),
+            f: applyRoutine
+          };
+          renderModals();
+        } else {
+          applyRoutine();
+        }
+      },
+
+      rmset: (v) => {
+        const [ei, si] = v.split('|').map(Number);
+        if (draft[ei]) {
+          draft[ei].sets.splice(si, 1);
+          if (!draft[ei].sets.length) draft.splice(ei, 1);
+        }
+        render();
+      },
+
+      clr: () => {
+        draft = [];
+        draft.name = '';
+        draft.min = '';
+        lastEx = { name: '', reps: '', w: '', rpe: '', done: true };
+        render();
+      },
+
+      savew: () => {
+        if (!draft.length) return showToast(L('เพิ่มอย่างน้อยหนึ่งเซ็ตก่อน', 'Add at least one set first'), 'error');
+        const durVal = nz($('#wdur')?.value);
+        if (durVal != null && durVal < 0) return showToast(L('ระยะเวลาต้องไม่ติดลบ', 'Duration cannot be negative'), 'error');
+        const workout = {
+          id: uid(),
+          date: D,
+          name: ($('#wn')?.value || '').trim() || L('เวิร์กเอาต์', 'Workout'),
+          min: durVal,
+          exercises: JSON.parse(JSON.stringify(draft))
+        };
+        draft = [];
+        draft.name = '';
+        draft.min = '';
+        lastEx = { name: '', reps: '', w: '', rpe: '', done: true };
+        safeRun(() => dbPut('workouts', workout), L('บันทึกเวิร์กเอาต์แล้ว', 'Saved'));
+      },
+
+      savec: () => {
+        const km = +($('#cd')?.value || 0);
+        const min = +($('#cm')?.value || 0);
+        const hr = nz($('#chr')?.value);
+        if (!(km > 0) || !(min > 0)) return showToast(L('ใส่ระยะทางและเวลามากกว่า 0', 'Enter distance and time above 0'), 'error');
+        if (hr != null && hr < 0) return showToast(L('ค่า HR ต้องไม่ติดลบ', 'HR cannot be negative'), 'error');
+        safeRun(() => dbPut('cardio', { id: uid(), date: D, type: $('#cy').value, km, min, hr }), L('บันทึกคาร์ดิโอแล้ว', 'Saved'));
+      },
+
+      saveb: () => {
+        const weight = nz($('#bw')?.value);
+        const fat = nz($('#bf')?.value);
+        const waist = nz($('#bs')?.value);
+        if (weight == null && fat == null && waist == null) return showToast(L('ใส่ค่าอย่างน้อยหนึ่งช่อง', 'Enter at least one value'), 'error');
+        if ((weight != null && weight <= 0) || (fat != null && (fat < 0 || fat > 100)) || (waist != null && waist <= 0)) {
+          return showToast(L('กรุณาใส่ตัวเลขที่ถูกต้องและไม่ติดลบ', 'Please enter valid non-negative numbers'), 'error');
+        }
+        safeRun(() => dbPut('body', { id: uid(), date: D, weight, fat, waist }), L('บันทึกสัดส่วนร่างกายแล้ว', 'Saved'));
+      },
+
+      // ลบและแก้ไข
+      del: (v) => {
+        const [store, id] = v.split('|');
+        pend = {
+          t: L('ต้องการลบรายการนี้ใช่หรือไม่?', 'Delete this item?'),
+          f: () => safeRun(async () => {
+            if (store === 'meals' && id.includes('#')) {
+              const [mid, iid] = id.split('#');
+              const m = S.meals.find(x => x.id === mid);
+              if (m) {
+                m.items = m.items.filter(i => i.id !== iid);
+                m.items.length ? await dbPut('meals', m) : await dbDelete('meals', mid);
+              }
+            } else {
+              await dbDelete(store, id);
+            }
+          }, L('ลบรายการแล้ว', 'Deleted'))
+        };
+        renderModals();
+      },
+
+      ed: (v) => {
+        const [s, id, iid] = v.split('|');
+        ed = { s, id, iid };
+        renderModals();
+      },
+
+      edsave: () => {
+        if (!ed) return;
+        const { s, id, iid } = ed;
+        const val = (k) => ($('#' + k)?.value ?? '');
+
+        if (s === 'foods') {
+          const n = val('e1').trim();
+          const u = val('e2').trim() || L('หน่วย', 'unit');
+          const k = nz(val('e3'));
+          const p = +val('e4') || 0;
+          const c = +val('e5') || 0;
+          const f = +val('e6') || 0;
+          if (!n || k == null || k < 0 || p < 0 || c < 0 || f < 0) {
+            return showToast(L('กรุณากรอกชื่อและค่าตัวเลขที่ไม่ติดลบ', 'Enter name and valid non-negative numbers'), 'error');
+          }
+          const rec = S.foods.find(x => x.id === id);
+          if (!rec) return;
+          Object.assign(rec, { n, cat: val('efcat') || 'other', u, k, p, c, f });
+          ed = null;
+          return safeRun(() => dbPut('foods', rec), L('แก้ไขอาหารส่วนตัวแล้ว', 'Updated'));
+        }
+
+        const nd = val('edd');
+        if (!nd) return showToast(L('กรุณาเลือกวันที่', 'Please select a date'), 'error');
+
+        if (s === 'meals' && !(Number(val('e1')) > 0)) {
+          return showToast(L('ใส่จำนวนมากกว่า 0', 'Enter a quantity above 0'), 'error');
+        }
+        if (s === 'cardio') {
+          const km = Number(val('e1')), min = Number(val('e2')), hr = nz(val('e3'));
+          if (!(km > 0 && min > 0) || (hr != null && hr < 0)) {
+            return showToast(L('ใส่ระยะทางและเวลามากกว่า 0', 'Enter valid distance, time and HR'), 'error');
+          }
+        }
+        if (s === 'body') {
+          const w = nz(val('e1')), f = nz(val('e2')), ws = nz(val('e3'));
+          if (w == null && f == null && ws == null) return showToast(L('ใส่ค่าอย่างน้อยหนึ่งช่อง', 'Enter at least one value'), 'error');
+          if ((w != null && w <= 0) || (f != null && (f < 0 || f > 100)) || (ws != null && ws <= 0)) {
+            return showToast(L('กรุณาใส่ตัวเลขที่ถูกต้องและไม่ติดลบ', 'Enter valid non-negative numbers'), 'error');
+          }
+        }
+
+        let parsedWorkoutEx = null;
+        let workoutDur = null;
+        if (s === 'workouts') {
+          workoutDur = nz(val('edur'));
+          if (workoutDur != null && workoutDur < 0) {
+            return showToast(L('ระยะเวลาต้องไม่ติดลบ', 'Duration cannot be negative'), 'error');
+          }
+          const lines = val('e2').split('\n');
+          parsedWorkoutEx = [];
+          for (let li = 0; li < lines.length; li++) {
+            const line = lines[li].trim();
+            if (!line) continue;
+            const idx = line.indexOf(':');
+            if (idx < 1) {
+              return showToast(
+                L(`บรรทัดที่ ${li + 1} รูปแบบไม่ถูกต้อง (ต้องมีเครื่องหมาย : คั่นชื่อท่ากับเซ็ต)`, `Line ${li + 1} is invalid (missing ":" after exercise name)`),
+                'error'
+              );
+            }
+            const sets = line.slice(idx + 1).split(',')
+              .map(part => part.match(/(\d+)\s*[x×]\s*([\d.]*)(?:\s*@\s*([\d.]+))?(\s*(?:ไม่เสร็จ|not done))?/i))
+              .filter(Boolean)
+              .map(m => ({ reps: +m[1], w: nz(m[2]), rpe: nz(m[3]), done: !m[4] }));
+            if (!sets.length) {
+              return showToast(
+                L(`บรรทัดที่ ${li + 1} ไม่มีข้อมูลเซ็ตที่ถูกต้อง (ใช้รูปแบบ เช่น 10x60)`, `Line ${li + 1} has no valid sets (use e.g. 10x60)`),
+                'error'
+              );
+            }
+            parsedWorkoutEx.push({ name: line.slice(0, idx).trim(), sets });
+          }
+          if (!parsedWorkoutEx.length) {
+            return showToast(L('รูปแบบท่าออกกำลังกายไม่ถูกต้อง เช่น Bench Press: 10x60', 'Invalid format. Use e.g. Bench Press: 10x60'), 'error');
+          }
+        }
+
+        safeRun(async () => {
+          if (s === 'meals') {
+            const m = S.meals.find(x => x.id === id);
+            const item = m.items.find(x => x.id === iid);
+            const q = +val('e1');
+            const ratio = q / item.q;
+            const newType = val('emtypec').trim() || val('emtype') || m.type;
+            Object.assign(item, { q, k: item.k * ratio, p: item.p * ratio, c: item.c * ratio, f: item.f * ratio });
+
+            if (nd !== m.date || newType !== m.type) {
+              m.items = m.items.filter(x => x !== item);
+              const target = S.meals.find(x => x.date === nd && x.type === newType) || { id: uid(), date: nd, type: newType, items: [] };
+              target.items.push(item);
+              await dbPut('meals', target);
+              m.items.length ? await dbPut('meals', m) : await dbDelete('meals', m.id);
+            } else {
+              await dbPut('meals', m);
+            }
+          } else {
+            const rec = S[s].find(x => x.id === id);
+            rec.date = nd;
+            if (s === 'workouts') {
+              rec.name = val('e1').trim() || rec.name;
+              rec.min = workoutDur;
+              rec.exercises = parsedWorkoutEx;
+            } else if (s === 'cardio') {
+              rec.type = val('e0');
+              rec.km = +val('e1');
+              rec.min = +val('e2');
+              rec.hr = nz(val('e3'));
+            } else {
+              rec.weight = nz(val('e1'));
+              rec.fat = nz(val('e2'));
+              rec.waist = nz(val('e3'));
+            }
+            await dbPut(s, rec);
+          }
+          ed = null;
+        }, L('แก้ไขเรียบร้อยแล้ว', 'Updated'));
+      },
+
+      // วิเคราะห์ & กราฟ
+      rg: (v) => { rg = +v; cu = null; render(); },
+      clrcu: () => { cu = null; render(); },
+      anbm: (v) => { anBodyMetric = v; render(); },
+      tipk: (v) => {
+        const [dt, kcal, partial] = v.split('|');
+        const el = $('#chart-tip-k');
+        if (el) el.textContent = `${fmt(dt, { day: 'numeric', month: 'short' })}: ${Number(kcal).toLocaleString()} kcal${partial === '1' ? L(' (บางส่วน)', ' (partial)') : ''}`;
+      },
+      tipw: (v) => {
+        const [dt, val, unit] = v.split('|');
+        const el = $('#chart-tip-w');
+        if (el) el.textContent = `${fmt(dt, { day: 'numeric', month: 'short' })}: ${val} ${unit || L('กก.', 'kg')}`;
+      },
+
+      // โปรไฟล์ & ตั้งค่า
+      savepf: () => {
+        let by = nz($('#pby')?.value);
+        let beConverted = false;
+        if (by != null && by >= 2400 && by <= 2650) {
+          by = by - 543;
+          beConverted = true;
+        }
+        const curY = new Date().getFullYear();
+        if (by != null && (by < 1900 || by >= curY)) {
+          return showToast(L(`กรุณากรอกปีเกิดเป็น ค.ศ. (เช่น 1998)`, `Please enter a valid CE birth year (e.g. 1998)`), 'error');
+        }
+        const h = nz($('#ph')?.value);
+        const gw = nz($('#pgw')?.value);
+        if ((h != null && h <= 0) || (gw != null && gw <= 0)) {
+          return showToast(L('ส่วนสูงและน้ำหนักเป้าหมายต้องมากกว่า 0', 'Height and goal weight must be above 0'), 'error');
+        }
+        set.pf = {
+          name: ($('#pn')?.value || '').trim(),
+          by,
+          sx: $('#psx')?.value || '',
+          h,
+          gw,
+          ac: $('#pac')?.value || '1.2',
+          gl: $('#pgl')?.value || 'keep'
+        };
+        saveSet();
+        showToast(beConverted
+          ? L(`บันทึกโปรไฟล์แล้ว (แปลงปีเกิดเป็น ค.ศ. ${by} อัตโนมัติ)`, `Profile saved (converted birth year to ${by} CE)`)
+          : L('บันทึกโปรไฟล์แล้ว', 'Profile saved'));
+        render();
+      },
+
+      usekcal: () => {
+        const e = estimateKcal();
+        if (e) { set.kcal = e; set.gs = 1; saveSet(); showToast(L('ตั้งเป้าหมายแคลอรี่แล้ว', 'Calorie goal set')); render(); }
+      },
+
+      useall: () => {
+        const e = estimateKcal();
+        if (e) {
+          const m = estimateMacros(e);
+          set.kcal = e; set.p = m.p; set.c = m.c; set.f = m.f; set.gs = 1;
+          saveSet();
+          showToast(L('ตั้งเป้าหมายแคลอรี่และมาโครเรียบร้อยแล้ว', 'Calories & macros goals applied'));
+          render();
+        }
+      },
+
+      saveset: () => {
+        const kcal = +($('#sk')?.value || 0);
+        const p = +($('#sp')?.value || 0);
+        const c = +($('#sc')?.value || 0);
+        const f = +($('#sf')?.value || 0);
+        const water = +($('#swat')?.value || 2000);
+        if (kcal <= 0 || p < 0 || c < 0 || f < 0 || water < 250) {
+          return showToast(L('กรุณากรอกค่าเป้าหมายที่ถูกต้อง', 'Please enter valid goal values'), 'error');
+        }
+        set.kcal = kcal; set.p = p; set.c = c; set.f = f; set.water = water;
+        set.th = $('#sth').value;
+        set.ws = +$('#sws').value;
+        set.gs = 1;
+        saveSet();
+        applyTheme();
+        showToast(L('บันทึกการตั้งค่าแล้ว', 'Settings saved'));
+        render();
+      },
+
+      lang: () => {
+        set.lang = set.lang === 'en' ? 'th' : 'en';
+        saveSet();
+        applyTheme();
+        render();
+      },
+
+      // สำรองและส่งออกข้อมูล
+      exp: () => {
+        const T = todayStr();
+        bkTxt = JSON.stringify({ app: 'fitlog', v: 1, at: new Date().toISOString(), settings: set, data: S }, null, 2);
+        try {
+          const url = URL.createObjectURL(new Blob([bkTxt], { type: 'application/json' }));
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `fitlog-backup-${T}.json`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (e) {}
+        set.bk = Date.now();
+        saveSet();
+        showToast(L('สร้างข้อมูลสำรองแล้ว (หากไม่ดาวน์โหลด สามารถคัดลอกจากกล่องด้านล่างได้)', 'Backup created (you can also copy from the box below)'));
+        render();
+      },
+
+      csv: () => {
+        const T = todayStr();
+        const H = ['type', 'date', 'name', 'quantity', 'unit', 'kcal', 'protein', 'carb', 'fat', 'reps', 'weight_kg', 'rpe', 'done', 'km', 'minutes', 'hr', 'body_fat_pct', 'waist_cm'];
+        const q = (v) => (v == null ? '' : `"${String(v).replace(/"/g, '""')}"`);
+        const rows = [
+          ...S.meals.flatMap(m => m.items.map(i => ({ type: 'meal:' + m.type, date: m.date, name: i.n, quantity: i.q, unit: i.u, kcal: r1(i.k), protein: r1(i.p), carb: r1(i.c), fat: r1(i.f) }))),
+          ...S.workouts.flatMap(w => w.exercises.flatMap(ex => ex.sets.map(st => ({ type: 'strength', date: w.date, name: `${w.name} / ${ex.name}`, reps: st.reps, weight_kg: st.w, rpe: st.rpe, done: st.done === false ? 'false' : 'true', minutes: w.min })))),
+          ...S.cardio.map(c => ({ type: 'cardio', date: c.date, name: c.type, km: c.km, minutes: c.min, hr: c.hr })),
+          ...S.body.map(b => ({ type: 'body', date: b.date, weight_kg: b.weight, body_fat_pct: b.fat, waist_cm: b.waist }))
+        ];
+        bkTxt = [H.join(','), ...rows.map(o => H.map(h => q(o[h])).join(','))].join('\n');
+        try {
+          const url = URL.createObjectURL(new Blob(['\ufeff' + bkTxt], { type: 'text/csv' }));
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `fitlog-${T}.csv`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (e) {}
+        showToast(L('สร้างไฟล์ CSV แล้ว', 'CSV created'));
+        render();
+      },
+
+      cp: () => {
+        const ta = $('#bkt');
+        if (!ta) return;
+        ta.select();
+        ta.setSelectionRange(0, ta.value.length);
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) {}
+        showToast(ok ? L('คัดลอกข้อความแล้ว', 'Copied to clipboard') : L('กรุณากด Ctrl+C เพื่อคัดลอก', 'Press Ctrl+C to copy'), ok ? 'ok' : 'info');
+      }
+    };
+
+    /* ============================================================================
+     * 14. EVENT LISTENERS & AUTO-SAVE NOTE
+     * ============================================================================ */
+    let noteSaveTimer = null;
+    let noteClearTimer = null;
+    const saveNoteSilently = async (dateKey, noteText) => {
+      try {
+        const updated = { ...dayRec(dateKey), note: noteText };
+        const idx = S.days.findIndex(x => x.id === dateKey);
+        if (idx >= 0) S.days[idx] = updated; else S.days.push(updated);
+        await dbPut('days', updated);
+        const statusEl = $('#note-status');
+        if (D === dateKey && statusEl) {
+          statusEl.textContent = L('บันทึกแล้ว', 'Saved');
+          clearTimeout(noteClearTimer);
+          noteClearTimer = setTimeout(() => {
+            if (D === dateKey && $('#note-status')) $('#note-status').textContent = '';
+          }, 1800);
+        }
+      } catch (err) {
+        const statusEl = $('#note-status');
+        if (D === dateKey && statusEl) statusEl.textContent = L('บันทึกไม่สำเร็จ', 'Save failed');
+      }
+    };
+
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-a]');
+      if (btn && A[btn.dataset.a]) A[btn.dataset.a](btn.dataset.v, e);
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && (pend || ed)) {
+        pend = null; ed = null; renderModals();
+      }
+    });
+
+    document.addEventListener('input', (e) => {
+      const id = e.target.id;
+      if (id === 'wn') {
+        draft.name = e.target.value;
+        saveDraft();
+      } else if (id === 'wdur') {
+        draft.min = e.target.value;
+        saveDraft();
+      } else if (id === 'en') {
+        const hint = $('#last-ex-hint');
+        if (hint) hint.innerHTML = renderLastExHint(e.target.value);
+      } else if (id === 'fsr') {
+        fs = e.target.value;
+        const resEl = $('#res');
+        if (resEl) resEl.innerHTML = renderFoodResults();
+      } else if (id === 'fq') {
+        updateFoodPreview();
+      } else if (e.target.dataset.note) {
+        const dk = e.target.dataset.note;
+        const val = e.target.value;
+        clearTimeout(noteSaveTimer);
+        noteSaveTimer = setTimeout(() => saveNoteSilently(dk, val), 450);
+      }
+    });
+
+    document.addEventListener('change', (e) => {
+      const t = e.target;
+      if (t.id === 'ft' || t.id === 'qft') {
+        lastMealType = t.value;
+        return;
+      }
+      if (t.dataset.note) {
+        clearTimeout(noteSaveTimer);
+        saveNoteSilently(t.dataset.note, t.value);
+        return;
+      }
+      const c = t.dataset.c;
+      if (!c) return;
+      if (c === 'setd' && t.value) { D = t.value; cm = D.slice(0, 7); render(); }
+      else if (c === 'cua' || c === 'cub') { cu = cu || {}; cu[c === 'cua' ? 'a' : 'b'] = t.value; render(); }
+      else if (c === 'flt') { F[t.dataset.v] = t.checked ? 1 : 0; render(); }
+      else if (c === 'st') safeRun(() => dbPut('days', { ...dayRec(D), [t.dataset.k]: t.value }));
+      else if (c === 'imp' && t.files && t.files[0]) {
+        const file = t.files[0];
+        t.value = '';
+        file.text().then(txt => {
+          try {
+            const j = JSON.parse(txt);
+            if (j.app !== 'fitlog' || !j.data) throw new Error('invalid');
+            for (const st of STORES) {
+              if (j.data[st] && !(Array.isArray(j.data[st]) && j.data[st].every(r => r && typeof r.id === 'string'))) {
+                throw new Error('invalid');
+              }
+            }
+            pend = {
+              t: L('การกู้คืนจะแทนที่ข้อมูลทั้งหมดในเครื่องนี้ ควรสร้างข้อมูลสำรองของตอนนี้ไว้ก่อน ดำเนินการต่อหรือไม่?', 'Restoring replaces all data on this device. Back up first. Continue?'),
+              f: () => safeRun(async () => {
+                bkTxt = JSON.stringify({ app: 'fitlog', v: 1, at: new Date().toISOString(), settings: set, data: S }, null, 2);
+                await dbReplaceAll(j.data);
+                set = { ...DEFAULT_SET(), ...(j.settings || {}) };
+                if (!Array.isArray(set.fav)) set.fav = [];
+                if (!set.pf || typeof set.pf !== 'object') set.pf = {};
+                fsel = null;
+                ed = null;
+                saveSet();
+                applyTheme();
+              }, L('กู้คืนข้อมูลแล้ว สำเนาข้อมูลเดิมอยู่ในกล่องข้อความหน้าตั้งค่า', 'Data restored. A snapshot of previous data is in the text box below.'))
+            };
+            renderModals();
+          } catch (err) {
+            showToast(L('ไฟล์สำรองไม่ถูกต้อง ยังไม่มีการเปลี่ยนแปลงข้อมูล', 'Invalid backup file. No changes were made.'), 'error');
+          }
+        });
+      }
+    });
+
+    // ตรวจสอบการเปลี่ยนวันข้ามเที่ยงคืนอัตโนมัติ
+    setInterval(() => {
+      const nowT = todayStr();
+      if (nowT !== lastKnownToday) {
+        if (D === lastKnownToday) { D = nowT; cm = nowT.slice(0, 7); }
+        lastKnownToday = nowT;
+        render();
+      }
+    }, 60000);
+
+    /* ============================================================================
+     * 15. INITIALIZATION (เริ่มต้นแอปพลิเคชัน)
+     * ============================================================================ */
+    const init = async () => {
+      applyTheme();
+      try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+      db = await openDB();
+      try {
+        await dbLoadAll();
+      } catch (e) {
+        showToast(L('อ่านข้อมูลไม่สำเร็จ', 'Failed to read data'), 'error');
+      }
+      render();
+    };
+
+    init();
+  })();
+  </script>
+</body>
+</html>
